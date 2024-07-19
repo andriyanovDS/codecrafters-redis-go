@@ -16,13 +16,19 @@ func main() {
 		fmt.Println("Failed to bind to port 6379")
 		os.Exit(1)
 	}
-	defer l.Close()
 
-	connection, err := l.Accept()
-	if err != nil {
-		fmt.Println("Error accepting connection: ", err.Error())
-		os.Exit(1)
+	for {
+		connection, err := l.Accept()
+		if err != nil {
+			fmt.Println("Error accepting connection: ", err.Error())
+			continue
+		}
+		fmt.Println("Connection accepted")
+		go handleConnection(connection)
 	}
+}
+
+func handleConnection(connection net.Conn) {
 	defer connection.Close()
 
 	reader := bufio.NewReader(connection)
@@ -37,7 +43,7 @@ func main() {
 			} else {
 				fmt.Printf("Failed to read string with error: %v\n", err)
 			}
-			os.Exit(1)
+			return	
 		}
 		if len(recv) > 0 {
 			recv += localRecv
