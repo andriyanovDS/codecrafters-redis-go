@@ -50,6 +50,7 @@ func main() {
 		}
 		if count == 3 {
 			connection.Write([]byte("+PONG\r\n"))
+			count = 0
 		}
 	}
 }
