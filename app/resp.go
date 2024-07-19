@@ -10,11 +10,11 @@ import (
 )
 
 const (
-	IntegerByte    = ':'
-	StringByte     = '+'
-	ErrorByte      = '-'
-	ArrayByte      = '*'
-	BulkStringByte = '$'
+	IntegerByte      = ':'
+	SimpleStringByte = '+'
+	ErrorByte        = '-'
+	ArrayByte        = '*'
+	BulkStringByte   = '$'
 )
 
 type RespDataType interface {
@@ -25,8 +25,16 @@ type Array struct {
 	Content []RespDataType
 }
 
-type String struct {
-	Content string
+type BulkString struct {
+	string
+}
+
+type SimpleString struct {
+	string
+}
+
+type Integer struct {
+	int64
 }
 
 func Parse(reader *bufio.Reader) (RespDataType, error) {
@@ -38,9 +46,7 @@ func Parse(reader *bufio.Reader) (RespDataType, error) {
 	fmt.Printf("first byte: %v\n", firstByte)
 	switch firstByte {
 	case BulkStringByte:
-		fmt.Println("Bulk string received")
-		length, err := readLendth(reader)
-		fmt.Printf("Bulk string length %v\n", length)
+		length, err := readInt(reader)
 		if err != nil {
 			return nil, err
 		}
@@ -49,11 +55,9 @@ func Parse(reader *bufio.Reader) (RespDataType, error) {
 			fmt.Printf("failed to read bulk string: %v\n", err)
 			return nil, err
 		}
-		return String{Content: string(bytes)}, nil
+		return BulkString{string(bytes)}, nil
 	case ArrayByte:
-		fmt.Println("Array received")
-		length, err := readLendth(reader)
-		fmt.Printf("Array length %v\n", length)
+		length, err := readInt(reader)
 		if err != nil {
 			return nil, err
 		}
@@ -67,6 +71,37 @@ func Parse(reader *bufio.Reader) (RespDataType, error) {
 			elements = append(elements, nextEl)
 		}
 		return Array{Content: elements}, nil
+	case IntegerByte:
+		sign, err := reader.ReadByte()
+		if err != nil {
+			fmt.Printf("failed to read integer: %v\n", err)
+			return nil, err
+		}
+		var isNegative bool
+		switch sign {
+		case '-':
+			isNegative = true
+		case '+':
+			isNegative = false
+		default:
+			reader.UnreadByte()
+		}
+		integer, err := readInt(reader)
+		if err != nil {
+			fmt.Printf("failed to read integer: %v\n", err)
+			return nil, err
+		}
+		if isNegative {
+			integer = -integer
+		}
+		return Integer{integer}, nil
+	case SimpleStringByte:
+		s, err := readNext(reader)
+		if err != nil {
+			fmt.Printf("failed to read simple string: %v\n", err)
+			return nil, err
+		}
+		return SimpleString{string(s)}, nil
 	default:
 		fmt.Printf("unexpected data type: %v\n", firstByte)
 		return nil, errors.New("unexpected data type")
@@ -105,7 +140,7 @@ func readExact(reader *bufio.Reader, count int) ([]byte, error) {
 	}
 }
 
-func readLendth(reader *bufio.Reader) (int64, error) {
+func readInt(reader *bufio.Reader) (int64, error) {
 	lengthBytes, err := readNext(reader)
 	if err != nil {
 		fmt.Printf("unable to read length: %v", err)
@@ -132,12 +167,31 @@ func (a Array) Bytes() []byte {
 	return bytes.Bytes()
 }
 
-func (s String) Bytes() []byte {
+func (s BulkString) Bytes() []byte {
 	var bytes bytes.Buffer
 	bytes.WriteByte(BulkStringByte)
-	bytes.Write([]byte(strconv.Itoa(len(s.Content))))
+	bytes.Write([]byte(strconv.Itoa(len(s.string))))
 	writeTerminator(&bytes)
-	bytes.Write([]byte(s.Content))
+	bytes.Write([]byte(s.string))
+	writeTerminator(&bytes)
+	return bytes.Bytes()
+}
+
+func (s SimpleString) Bytes() []byte {
+	var bytes bytes.Buffer
+	bytes.WriteByte(SimpleStringByte)
+	bytes.Write([]byte(s.string))
+	writeTerminator(&bytes)
+	return bytes.Bytes()
+}
+
+func (i Integer) Bytes() []byte {
+	var bytes bytes.Buffer
+	bytes.WriteByte(IntegerByte)
+	if i.int64 < 0 {
+		bytes.WriteByte('-')
+	}
+	bytes.Write([]byte(strconv.Itoa(int(i.int64))))
 	writeTerminator(&bytes)
 	return bytes.Bytes()
 }
