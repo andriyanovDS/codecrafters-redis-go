@@ -5,8 +5,12 @@ import (
 	"fmt"
 	"net"
 	"os"
-	"strings"
 )
+
+var commands = []Command{
+	EchoCommand,
+	PingCommand,
+}
 
 func main() {
 	fmt.Println("Logs from your program will appear here!")
@@ -32,31 +36,18 @@ func handleConnection(connection net.Conn) {
 	defer connection.Close()
 
 	reader := bufio.NewReader(connection)
-	var recv string
-	var count int
-
 	for {
-		localRecv, err := reader.ReadString('\n')
+		resp, err := Parse(reader)
 		if err != nil {
-			if err.Error() == "EOF" {
-				fmt.Println("Connection closed by the server")
-			} else {
-				fmt.Printf("Failed to read string with error: %v\n", err)
+			fmt.Printf("RESP parsing failed: %v\n", err)
+			return
+		}
+		request := resp.(Array)
+		for _, command := range commands {
+			response := command(request)
+			if response != nil {
+				connection.Write(response.Bytes())
 			}
-			return	
-		}
-		if len(recv) > 0 {
-			recv += localRecv
-		} else {
-			recv = localRecv
-		}
-		if strings.HasSuffix(recv, "\r\n") {
-			count += 1
-			recv = ""
-		}
-		if count == 3 {
-			connection.Write([]byte("+PONG\r\n"))
-			count = 0
 		}
 	}
 }
