@@ -1,20 +1,28 @@
 package main
 
 import (
+	"fmt"
+	"strconv"
 	"strings"
 	"sync"
+	"time"
 )
 
 type Command func(Array, *Context) RespDataType
 
 type Context struct {
-	storage map[string]string
+	storage map[string]entity
 	mutex   sync.Mutex
+}
+
+type entity struct {
+	value    string
+	expireAt time.Time
 }
 
 func NewContext() Context {
 	return Context{
-		storage: make(map[string]string),
+		storage: make(map[string]entity),
 		mutex:   sync.Mutex{},
 	}
 }
@@ -55,10 +63,33 @@ func SetCommand(resp Array, context *Context) RespDataType {
 		return nil
 	}
 	key := toString(resp.Content[1])
-	value := toString(resp.Content[2])
+	entity := entity{
+		value:    toString(resp.Content[2]),
+		expireAt: time.Time{},
+	}
+
+	var argIndex = 3
+	for {
+		if argIndex >= len(resp.Content) {
+			break
+		}
+		func() {
+			defer func() { argIndex += 2 }()
+			arg := toString(resp.Content[argIndex])
+			if strings.ToLower(arg) == "px" {
+				ms, err := strconv.Atoi(toString(resp.Content[argIndex+1]))
+				if err != nil {
+					fmt.Printf("expiry time must be a positive integer")
+					return
+				}
+				entity.expireAt = time.Now().Add(time.Duration(ms) * time.Millisecond)
+				fmt.Printf("Set expiry date: %v\n", entity.expireAt)
+			}
+		}()
+	}
 
 	context.mutex.Lock()
-	context.storage[key] = value
+	context.storage[key] = entity
 	context.mutex.Unlock()
 	return SimpleString{"OK"}
 }
@@ -74,13 +105,16 @@ func GetCommand(resp Array, context *Context) RespDataType {
 	key := toString(resp.Content[1])
 
 	context.mutex.Lock()
-	value, ok := context.storage[key]
+	entity, ok := context.storage[key]
 	context.mutex.Unlock()
 
-	if ok {
-		return BulkString{value}
+	if !ok {
+		return NullBulkString{}
+	}
+	if !entity.expireAt.IsZero() && entity.expireAt.Before(time.Now()) {
+		return NullBulkString{}
 	} else {
-		return BulkString{"-1"}
+		return BulkString{entity.value}
 	}
 }
 

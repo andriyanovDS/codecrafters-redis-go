@@ -29,6 +29,8 @@ type BulkString struct {
 	string
 }
 
+type NullBulkString struct{}
+
 type SimpleString struct {
 	string
 }
@@ -43,7 +45,6 @@ func Parse(reader *bufio.Reader) (RespDataType, error) {
 		fmt.Printf("failed to read byte: %v", err)
 		return nil, err
 	}
-	fmt.Printf("first byte: %v\n", firstByte)
 	switch firstByte {
 	case BulkStringByte:
 		length, err := readInt(reader)
@@ -173,6 +174,14 @@ func (s BulkString) Bytes() []byte {
 	bytes.Write([]byte(strconv.Itoa(len(s.string))))
 	writeTerminator(&bytes)
 	bytes.Write([]byte(s.string))
+	writeTerminator(&bytes)
+	return bytes.Bytes()
+}
+
+func (s NullBulkString) Bytes() []byte {
+	var bytes bytes.Buffer
+	bytes.WriteByte(BulkStringByte)
+	bytes.Write([]byte(strconv.Itoa(-1)))
 	writeTerminator(&bytes)
 	return bytes.Bytes()
 }
