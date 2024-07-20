@@ -15,11 +15,10 @@ var commands = []Command{
 }
 
 func main() {
-	fmt.Println("Logs from your program will appear here!")
-
-	l, err := net.Listen("tcp", "0.0.0.0:6379")
+	args := ParseArgs()
+	l, err := net.Listen("tcp", fmt.Sprintf("0.0.0.0:%d", args.Port))
 	if err != nil {
-		fmt.Println("Failed to bind to port 6379")
+		fmt.Printf("Failed to bind to port %d\n", args.Port)
 		os.Exit(1)
 	}
 
