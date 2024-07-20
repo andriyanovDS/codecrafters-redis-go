@@ -5,13 +5,19 @@ import (
 	"fmt"
 	"net"
 	"os"
+
+	"github.com/codecrafters-io/redis-starter-go/app/commands"
+	"github.com/codecrafters-io/redis-starter-go/app/resp"
 )
 
-var commands = []Command{
-	EchoCommand,
-	PingCommand,
-	SetCommand,
-	GetCommand,
+type Array = resp.Array
+
+var redisCommands = []commands.Command{
+	commands.EchoCommand,
+	commands.PingCommand,
+	commands.SetCommand,
+	commands.GetCommand,
+	commands.InfoCommand,
 }
 
 func main() {
@@ -22,7 +28,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	context := NewContext()
+	context := commands.NewContext()
 	for {
 		connection, err := l.Accept()
 		if err != nil {
@@ -34,18 +40,18 @@ func main() {
 	}
 }
 
-func handleConnection(connection net.Conn, context *Context) {
+func handleConnection(connection net.Conn, context *commands.Context) {
 	defer connection.Close()
 
 	reader := bufio.NewReader(connection)
 	for {
-		resp, err := Parse(reader)
+		resp, err := resp.Parse(reader)
 		if err != nil {
 			fmt.Printf("RESP parsing failed: %v\n", err)
 			return
 		}
 		request := resp.(Array)
-		for _, command := range commands {
+		for _, command := range redisCommands {
 			response := command(request, context)
 			if response != nil {
 				connection.Write(response.Bytes())

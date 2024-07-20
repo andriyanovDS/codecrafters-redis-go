@@ -1,4 +1,4 @@
-package main
+package commands
 
 import (
 	"fmt"
@@ -6,9 +6,14 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/codecrafters-io/redis-starter-go/app/resp"
 )
 
-type Command func(Array, *Context) RespDataType
+type Command func(resp.Array, *Context) resp.RespDataType
+type BulkString = resp.BulkString
+type SimpleString = resp.SimpleString
+type NullBulkString = resp.NullBulkString
 
 type Context struct {
 	storage map[string]entity
@@ -27,39 +32,39 @@ func NewContext() Context {
 	}
 }
 
-func PingCommand(resp Array, _ *Context) RespDataType {
+func PingCommand(resp resp.Array, _ *Context) resp.RespDataType {
 	len := len(resp.Content)
 	if len == 0 || len > 2 {
 		return nil
 	}
 	command := resp.Content[0].(BulkString)
-	if strings.ToLower(command.string) != "ping" {
+	if strings.ToLower(string(command)) != "ping" {
 		return nil
 	}
 	if len == 2 {
 		return resp.Content[1]
 	} else {
-		return BulkString{"PONG"}
+		return BulkString("PONG")
 	}
 }
 
-func EchoCommand(resp Array, _ *Context) RespDataType {
+func EchoCommand(resp resp.Array, _ *Context) resp.RespDataType {
 	if len(resp.Content) != 2 {
 		return nil
 	}
 	command := resp.Content[0].(BulkString)
-	if strings.ToLower(command.string) != "echo" {
+	if strings.ToLower(string(command)) != "echo" {
 		return nil
 	}
 	return resp.Content[1]
 }
 
-func SetCommand(resp Array, context *Context) RespDataType {
+func SetCommand(resp resp.Array, context *Context) resp.RespDataType {
 	if len(resp.Content) == 0 {
 		return nil
 	}
 	command := resp.Content[0].(BulkString)
-	if strings.ToLower(command.string) != "set" {
+	if strings.ToLower(string(command)) != "set" {
 		return nil
 	}
 	key := toString(resp.Content[1])
@@ -91,15 +96,15 @@ func SetCommand(resp Array, context *Context) RespDataType {
 	context.mutex.Lock()
 	context.storage[key] = entity
 	context.mutex.Unlock()
-	return SimpleString{"OK"}
+	return SimpleString("OK")
 }
 
-func GetCommand(resp Array, context *Context) RespDataType {
+func GetCommand(resp resp.Array, context *Context) resp.RespDataType {
 	if len(resp.Content) != 2 {
 		return nil
 	}
 	command := resp.Content[0].(BulkString)
-	if strings.ToLower(command.string) != "get" {
+	if strings.ToLower(string(command)) != "get" {
 		return nil
 	}
 	key := toString(resp.Content[1])
@@ -114,16 +119,27 @@ func GetCommand(resp Array, context *Context) RespDataType {
 	if !entity.expireAt.IsZero() && entity.expireAt.Before(time.Now()) {
 		return NullBulkString{}
 	} else {
-		return BulkString{entity.value}
+		return BulkString(entity.value)
 	}
 }
 
-func toString(r RespDataType) string {
+func InfoCommand(resp resp.Array, context *Context) resp.RespDataType {
+	if len(resp.Content) == 0 {
+		return nil
+	}
+	command := resp.Content[0].(BulkString)
+	if strings.ToLower(string(command)) != "info" {
+		return nil
+	}
+	return BulkString("role:master")
+}
+
+func toString(r resp.RespDataType) string {
 	switch t := r.(type) {
 	case BulkString:
-		return t.string
-	case SimpleString:
-		return t.string
+		return string(t)
+	case resp.SimpleString:
+		return string(t)
 	default:
 		return ""
 	}

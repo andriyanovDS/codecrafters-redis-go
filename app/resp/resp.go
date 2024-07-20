@@ -1,4 +1,4 @@
-package main
+package resp
 
 import (
 	"bufio"
@@ -25,19 +25,10 @@ type Array struct {
 	Content []RespDataType
 }
 
-type BulkString struct {
-	string
-}
-
+type BulkString string
+type SimpleString string
+type Integer int64
 type NullBulkString struct{}
-
-type SimpleString struct {
-	string
-}
-
-type Integer struct {
-	int64
-}
 
 func Parse(reader *bufio.Reader) (RespDataType, error) {
 	firstByte, err := reader.ReadByte()
@@ -56,7 +47,7 @@ func Parse(reader *bufio.Reader) (RespDataType, error) {
 			fmt.Printf("failed to read bulk string: %v\n", err)
 			return nil, err
 		}
-		return BulkString{string(bytes)}, nil
+		return BulkString(bytes), nil
 	case ArrayByte:
 		length, err := readInt(reader)
 		if err != nil {
@@ -95,14 +86,14 @@ func Parse(reader *bufio.Reader) (RespDataType, error) {
 		if isNegative {
 			integer = -integer
 		}
-		return Integer{integer}, nil
+		return Integer(integer), nil
 	case SimpleStringByte:
 		s, err := readNext(reader)
 		if err != nil {
 			fmt.Printf("failed to read simple string: %v\n", err)
 			return nil, err
 		}
-		return SimpleString{string(s)}, nil
+		return SimpleString(s), nil
 	default:
 		fmt.Printf("unexpected data type: %v\n", firstByte)
 		return nil, errors.New("unexpected data type")
@@ -171,9 +162,9 @@ func (a Array) Bytes() []byte {
 func (s BulkString) Bytes() []byte {
 	var bytes bytes.Buffer
 	bytes.WriteByte(BulkStringByte)
-	bytes.Write([]byte(strconv.Itoa(len(s.string))))
+	bytes.Write([]byte(strconv.Itoa(len(s))))
 	writeTerminator(&bytes)
-	bytes.Write([]byte(s.string))
+	bytes.Write([]byte(s))
 	writeTerminator(&bytes)
 	return bytes.Bytes()
 }
@@ -189,7 +180,7 @@ func (s NullBulkString) Bytes() []byte {
 func (s SimpleString) Bytes() []byte {
 	var bytes bytes.Buffer
 	bytes.WriteByte(SimpleStringByte)
-	bytes.Write([]byte(s.string))
+	bytes.Write([]byte(s))
 	writeTerminator(&bytes)
 	return bytes.Bytes()
 }
@@ -197,10 +188,10 @@ func (s SimpleString) Bytes() []byte {
 func (i Integer) Bytes() []byte {
 	var bytes bytes.Buffer
 	bytes.WriteByte(IntegerByte)
-	if i.int64 < 0 {
+	if i < 0 {
 		bytes.WriteByte('-')
 	}
-	bytes.Write([]byte(strconv.Itoa(int(i.int64))))
+	bytes.Write([]byte(strconv.Itoa(int(i))))
 	writeTerminator(&bytes)
 	return bytes.Bytes()
 }
