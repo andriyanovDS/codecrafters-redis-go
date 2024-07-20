@@ -6,6 +6,7 @@ import (
 	"net"
 	"os"
 
+	"github.com/codecrafters-io/redis-starter-go/app/args"
 	"github.com/codecrafters-io/redis-starter-go/app/commands"
 	"github.com/codecrafters-io/redis-starter-go/app/resp"
 )
@@ -21,14 +22,15 @@ var redisCommands = []commands.Command{
 }
 
 func main() {
-	args := ParseArgs()
+	args := args.ParseArgs()
 	l, err := net.Listen("tcp", fmt.Sprintf("0.0.0.0:%d", args.Port))
 	if err != nil {
 		fmt.Printf("Failed to bind to port %d\n", args.Port)
 		os.Exit(1)
 	}
+	fmt.Printf("Listening on port %v\n", args.Port)
 
-	context := commands.NewContext()
+	context := commands.NewContext(args)
 	for {
 		connection, err := l.Accept()
 		if err != nil {

@@ -7,6 +7,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/codecrafters-io/redis-starter-go/app/args"
 	"github.com/codecrafters-io/redis-starter-go/app/resp"
 )
 
@@ -16,6 +17,7 @@ type SimpleString = resp.SimpleString
 type NullBulkString = resp.NullBulkString
 
 type Context struct {
+	args    args.Args
 	storage map[string]entity
 	mutex   sync.Mutex
 }
@@ -25,8 +27,9 @@ type entity struct {
 	expireAt time.Time
 }
 
-func NewContext() Context {
+func NewContext(args args.Args) Context {
 	return Context{
+		args:    args,
 		storage: make(map[string]entity),
 		mutex:   sync.Mutex{},
 	}
@@ -131,7 +134,11 @@ func InfoCommand(resp resp.Array, context *Context) resp.RespDataType {
 	if strings.ToLower(string(command)) != "info" {
 		return nil
 	}
-	return BulkString("role:master")
+	if context.args.ReplicaOf.Host != "" {
+		return BulkString("role:slave")
+	} else {
+		return BulkString("role:master")
+	}
 }
 
 func toString(r resp.RespDataType) string {
