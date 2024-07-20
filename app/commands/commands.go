@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/codecrafters-io/redis-starter-go/app/args"
+	"github.com/codecrafters-io/redis-starter-go/app/replication"
 	"github.com/codecrafters-io/redis-starter-go/app/resp"
 )
 
@@ -17,9 +18,10 @@ type SimpleString = resp.SimpleString
 type NullBulkString = resp.NullBulkString
 
 type Context struct {
-	args    args.Args
-	storage map[string]entity
-	mutex   sync.Mutex
+	args            args.Args
+	storage         map[string]entity
+	replicationRole replication.Role
+	mutex           sync.Mutex
 }
 
 type entity struct {
@@ -31,7 +33,16 @@ func NewContext(args args.Args) Context {
 	return Context{
 		args:    args,
 		storage: make(map[string]entity),
-		mutex:   sync.Mutex{},
+		replicationRole: func() replication.Role {
+			if args.ReplicaOf.Host != "" {
+				return replication.SlaveRole{
+					Address: args.ReplicaOf,
+				}
+			} else {
+				return replication.NewMaster()
+			}
+		}(),
+		mutex: sync.Mutex{},
 	}
 }
 
@@ -134,11 +145,23 @@ func InfoCommand(resp resp.Array, context *Context) resp.RespDataType {
 	if strings.ToLower(string(command)) != "info" {
 		return nil
 	}
-	if context.args.ReplicaOf.Host != "" {
-		return BulkString("role:slave")
-	} else {
-		return BulkString("role:master")
+	return replicationInfo(context)
+}
+
+func replicationInfo(context *Context) BulkString {
+	var builder strings.Builder
+	builder.WriteString("# Replication\r\n")
+	info := make(map[string]string)
+	context.replicationRole.CollectInfo(info)
+
+	for key, value := range info {
+		builder.WriteString(key)
+		builder.WriteByte(':')
+		builder.WriteString(value)
+		builder.WriteByte('\r')
+		builder.WriteByte('\n')
 	}
+	return resp.BulkString(builder.String())
 }
 
 func toString(r resp.RespDataType) string {

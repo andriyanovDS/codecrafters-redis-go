@@ -5,16 +5,13 @@ import (
 	"os"
 	"strconv"
 	"strings"
+
+	"github.com/codecrafters-io/redis-starter-go/app/replication"
 )
 
 type Args struct {
 	Port      uint16
-	ReplicaOf ReplicaAddress
-}
-
-type ReplicaAddress struct {
-	Host string
-	Port uint16
+	ReplicaOf replication.ReplicaAddress
 }
 
 var parsers = map[string]flagParser{
@@ -66,7 +63,7 @@ func replicaof(rest []string, args *Args) []string {
 		if err != nil {
 			fmt.Printf("failed to parse replica port: %v", err)
 		} else {
-			args.ReplicaOf = ReplicaAddress{
+			args.ReplicaOf = replication.ReplicaAddress{
 				Host: parts[0],
 				Port: uint16(port),
 			}
