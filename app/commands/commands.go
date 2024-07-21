@@ -46,7 +46,7 @@ func NewContext(args args.Args) Context {
 	}
 }
 
-func PingCommand(resp resp.Array, _ *Context) resp.RespDataType {
+func Ping(resp resp.Array, _ *Context) resp.RespDataType {
 	len := len(resp.Content)
 	if len == 0 || len > 2 {
 		return nil
@@ -62,7 +62,7 @@ func PingCommand(resp resp.Array, _ *Context) resp.RespDataType {
 	}
 }
 
-func EchoCommand(resp resp.Array, _ *Context) resp.RespDataType {
+func Echo(resp resp.Array, _ *Context) resp.RespDataType {
 	if len(resp.Content) != 2 {
 		return nil
 	}
@@ -73,7 +73,7 @@ func EchoCommand(resp resp.Array, _ *Context) resp.RespDataType {
 	return resp.Content[1]
 }
 
-func SetCommand(response resp.Array, context *Context) resp.RespDataType {
+func Set(response resp.Array, context *Context) resp.RespDataType {
 	if len(response.Content) == 0 {
 		return nil
 	}
@@ -113,7 +113,7 @@ func SetCommand(response resp.Array, context *Context) resp.RespDataType {
 	return SimpleString("OK")
 }
 
-func GetCommand(response resp.Array, context *Context) resp.RespDataType {
+func Get(response resp.Array, context *Context) resp.RespDataType {
 	if len(response.Content) != 2 {
 		return nil
 	}
@@ -137,7 +137,18 @@ func GetCommand(response resp.Array, context *Context) resp.RespDataType {
 	}
 }
 
-func InfoCommand(resp resp.Array, context *Context) resp.RespDataType {
+func Replconf(resp resp.Array, context *Context) resp.RespDataType {
+	if len(resp.Content) == 0 {
+		return nil
+	}
+	command := resp.Content[0].(BulkString)
+	if command != "replconf" {
+		return nil
+	}
+	return SimpleString("OK")
+}
+
+func Info(resp resp.Array, context *Context) resp.RespDataType {
 	if len(resp.Content) == 0 {
 		return nil
 	}

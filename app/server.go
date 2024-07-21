@@ -15,11 +15,12 @@ import (
 type Array = resp.Array
 
 var redisCommands = []commands.Command{
-	commands.EchoCommand,
-	commands.PingCommand,
-	commands.SetCommand,
-	commands.GetCommand,
-	commands.InfoCommand,
+	commands.Echo,
+	commands.Ping,
+	commands.Set,
+	commands.Get,
+	commands.Info,
+	commands.Replconf,
 }
 
 func main() {
