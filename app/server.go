@@ -21,6 +21,7 @@ var redisCommands = []commands.Command{
 	commands.Get,
 	commands.Info,
 	commands.Replconf,
+	commands.Psync,
 }
 
 func main() {

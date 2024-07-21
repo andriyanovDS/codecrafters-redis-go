@@ -148,6 +148,19 @@ func Replconf(resp resp.Array, context *Context) resp.RespDataType {
 	return SimpleString("OK")
 }
 
+func Psync(resp resp.Array, context *Context) resp.RespDataType {
+	if len(resp.Content) == 0 {
+		return nil
+	}
+	command := resp.Content[0].(BulkString)
+	if command != "psync" {
+		return nil
+	}
+	master := context.ReplicationRole.(replication.MasterRole)
+	response := fmt.Sprintf("FULLRESYNC %v %d", master.Id, master.Offset)
+	return SimpleString(response)
+}
+
 func Info(resp resp.Array, context *Context) resp.RespDataType {
 	if len(resp.Content) == 0 {
 		return nil

@@ -16,14 +16,14 @@ type Role interface {
 }
 
 type MasterRole struct {
-	id     string
-	offset uint64
+	Id     string
+	Offset uint64
 }
 
 func NewMaster() MasterRole {
 	return MasterRole{
-		id:     generateRepId(),
-		offset: 0,
+		Id:     generateRepId(),
+		Offset: 0,
 	}
 }
 
@@ -125,8 +125,8 @@ func (c SlaveConnection) Handshake(port uint16) error {
 
 func (r MasterRole) CollectInfo(info map[string]string) {
 	info["role"] = "master"
-	info["master_replid"] = r.id
-	info["master_repl_offset"] = strconv.FormatUint(r.offset, 10)
+	info["master_replid"] = r.Id
+	info["master_repl_offset"] = strconv.FormatUint(r.Offset, 10)
 }
 
 func (r SlaveRole) CollectInfo(info map[string]string) {
