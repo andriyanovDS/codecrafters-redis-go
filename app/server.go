@@ -34,7 +34,7 @@ func main() {
 	context := commands.NewContext(args)
 	slaveRole, ok := context.ReplicationRole.(replication.SlaveRole)
 	if ok {
-		go syncWithMaster(slaveRole)
+		go syncWithMaster(slaveRole, args.Port)
 	}
 	for {
 		connection, err := l.Accept()
@@ -67,11 +67,14 @@ func handleConnection(connection net.Conn, context *commands.Context) {
 	}
 }
 
-func syncWithMaster(slave replication.SlaveRole) {
+func syncWithMaster(slave replication.SlaveRole, listeningPort uint16) {
 	conn, err := replication.ConnectToMaster(slave)
 	if err != nil {
 		fmt.Printf("failed to establish connection with master: %v", err)
 		return
 	}
-	conn.Handshake()
+	err = conn.Handshake(listeningPort)
+	if err != nil {
+		fmt.Printf("handshake failed: %v", err)
+	}
 }

@@ -52,7 +52,7 @@ func PingCommand(resp resp.Array, _ *Context) resp.RespDataType {
 		return nil
 	}
 	command := resp.Content[0].(BulkString)
-	if strings.ToLower(string(command)) != "ping" {
+	if command != "ping" {
 		return nil
 	}
 	if len == 2 {
@@ -67,36 +67,36 @@ func EchoCommand(resp resp.Array, _ *Context) resp.RespDataType {
 		return nil
 	}
 	command := resp.Content[0].(BulkString)
-	if strings.ToLower(string(command)) != "echo" {
+	if command != "echo" {
 		return nil
 	}
 	return resp.Content[1]
 }
 
-func SetCommand(resp resp.Array, context *Context) resp.RespDataType {
-	if len(resp.Content) == 0 {
+func SetCommand(response resp.Array, context *Context) resp.RespDataType {
+	if len(response.Content) == 0 {
 		return nil
 	}
-	command := resp.Content[0].(BulkString)
-	if strings.ToLower(string(command)) != "set" {
+	command := response.Content[0].(BulkString)
+	if command != "set" {
 		return nil
 	}
-	key := toString(resp.Content[1])
+	key := resp.String(response.Content[1])
 	entity := entity{
-		value:    toString(resp.Content[2]),
+		value:    resp.String(response.Content[2]),
 		expireAt: time.Time{},
 	}
 
 	var argIndex = 3
 	for {
-		if argIndex >= len(resp.Content) {
+		if argIndex >= len(response.Content) {
 			break
 		}
 		func() {
 			defer func() { argIndex += 2 }()
-			arg := toString(resp.Content[argIndex])
+			arg := resp.String(response.Content[argIndex])
 			if strings.ToLower(arg) == "px" {
-				ms, err := strconv.Atoi(toString(resp.Content[argIndex+1]))
+				ms, err := strconv.Atoi(resp.String(response.Content[argIndex+1]))
 				if err != nil {
 					fmt.Printf("expiry time must be a positive integer")
 					return
@@ -113,15 +113,15 @@ func SetCommand(resp resp.Array, context *Context) resp.RespDataType {
 	return SimpleString("OK")
 }
 
-func GetCommand(resp resp.Array, context *Context) resp.RespDataType {
-	if len(resp.Content) != 2 {
+func GetCommand(response resp.Array, context *Context) resp.RespDataType {
+	if len(response.Content) != 2 {
 		return nil
 	}
-	command := resp.Content[0].(BulkString)
-	if strings.ToLower(string(command)) != "get" {
+	command := response.Content[0].(BulkString)
+	if command != "get" {
 		return nil
 	}
-	key := toString(resp.Content[1])
+	key := resp.String(response.Content[1])
 
 	context.mutex.Lock()
 	entity, ok := context.storage[key]
@@ -142,7 +142,7 @@ func InfoCommand(resp resp.Array, context *Context) resp.RespDataType {
 		return nil
 	}
 	command := resp.Content[0].(BulkString)
-	if strings.ToLower(string(command)) != "info" {
+	if command != "info" {
 		return nil
 	}
 	return replicationInfo(context)
@@ -162,15 +162,4 @@ func replicationInfo(context *Context) BulkString {
 		builder.WriteByte('\n')
 	}
 	return resp.BulkString(builder.String())
-}
-
-func toString(r resp.RespDataType) string {
-	switch t := r.(type) {
-	case BulkString:
-		return string(t)
-	case resp.SimpleString:
-		return string(t)
-	default:
-		return ""
-	}
 }

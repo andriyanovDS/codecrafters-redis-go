@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"strconv"
+	"strings"
 )
 
 const (
@@ -23,6 +24,13 @@ type RespDataType interface {
 
 type Array struct {
 	Content []RespDataType
+}
+
+func (a Array) Command() string {
+	if len(a.Content) == 0 {
+		return ""
+	}
+	return strings.ToLower(String(a.Content[0]))
 }
 
 type BulkString string
@@ -47,7 +55,7 @@ func Parse(reader *bufio.Reader) (RespDataType, error) {
 			fmt.Printf("failed to read bulk string: %v\n", err)
 			return nil, err
 		}
-		return BulkString(bytes), nil
+		return BulkString(strings.ToLower(string(bytes))), nil
 	case ArrayByte:
 		length, err := readInt(reader)
 		if err != nil {
@@ -93,7 +101,7 @@ func Parse(reader *bufio.Reader) (RespDataType, error) {
 			fmt.Printf("failed to read simple string: %v\n", err)
 			return nil, err
 		}
-		return SimpleString(s), nil
+		return SimpleString(strings.ToLower(string(s))), nil
 	default:
 		fmt.Printf("unexpected data type: %v\n", firstByte)
 		return nil, errors.New("unexpected data type")
@@ -150,8 +158,8 @@ func (a Array) Bytes() []byte {
 	var bytes bytes.Buffer
 	bytes.WriteByte(ArrayByte)
 	bytes.Write([]byte(strconv.Itoa(len(a.Content))))
+	writeTerminator(&bytes)
 	for _, element := range a.Content {
-		writeTerminator(&bytes)
 		bytes.Write(element.Bytes())
 	}
 	return bytes.Bytes()
@@ -197,4 +205,15 @@ func (i Integer) Bytes() []byte {
 func writeTerminator(w io.ByteWriter) {
 	w.WriteByte('\r')
 	w.WriteByte('\n')
+}
+
+func String(r RespDataType) string {
+	switch t := r.(type) {
+	case BulkString:
+		return string(t)
+	case SimpleString:
+		return string(t)
+	default:
+		return ""
+	}
 }

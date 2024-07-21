@@ -1,6 +1,7 @@
 package replication
 
 import (
+	"bufio"
 	"fmt"
 	"math/rand"
 	"net"
@@ -36,7 +37,7 @@ type ReplicaAddress struct {
 }
 
 type Connection interface {
-	Handshake()
+	Handshake(port uint16) error
 }
 
 type SlaveConnection struct {
@@ -53,11 +54,56 @@ func ConnectToMaster(slave SlaveRole) (Connection, error) {
 	}, nil
 }
 
-func (c SlaveConnection) Handshake() {
+func (c SlaveConnection) Handshake(port uint16) error {
 	ping := resp.Array{
-		Content: []resp.RespDataType{resp.BulkString("Ping")},
+		Content: []resp.RespDataType{resp.BulkString("ping")},
 	}
 	c.conn.Write(ping.Bytes())
+
+	reader := bufio.NewReader(c.conn)
+	response, err := resp.Parse(reader)
+	if err != nil {
+		return err
+	}
+	command := response.(resp.SimpleString)
+	if command != "pong" {
+		return fmt.Errorf("unexpected response: %v", command)
+	}
+
+	lisneningPort := resp.Array{
+		Content: []resp.RespDataType{
+			resp.BulkString("REPLCONF"),
+			resp.BulkString("listening-port"),
+			resp.BulkString(strconv.Itoa(int(port))),
+		},
+	}
+	c.conn.Write(lisneningPort.Bytes())
+	response, err = resp.Parse(reader)
+	if err != nil {
+		return err
+	}
+	command = response.(resp.SimpleString)
+	if command != "ok" {
+		return fmt.Errorf("unexpected response: %v", command)
+	}
+
+	capabilities := resp.Array{
+		Content: []resp.RespDataType{
+			resp.BulkString("REPLCONF"),
+			resp.BulkString("capa"),
+			resp.BulkString("psync2"),
+		},
+	}
+	c.conn.Write(capabilities.Bytes())
+	response, err = resp.Parse(reader)
+	if err != nil {
+		return err
+	}
+	command = response.(resp.SimpleString)
+	if command != "ok" {
+		return fmt.Errorf("unexpected response: %v", command)
+	}
+	return nil
 }
 
 func (r MasterRole) CollectInfo(info map[string]string) {
