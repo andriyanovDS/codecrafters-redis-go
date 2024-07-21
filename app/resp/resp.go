@@ -149,13 +149,11 @@ func readInt(reader *bufio.Reader) (int64, error) {
 func (a Array) Bytes() []byte {
 	var bytes bytes.Buffer
 	bytes.WriteByte(ArrayByte)
-	bytes.Write([]byte(string(len(a.Content))))
-	writeTerminator(&bytes)
+	bytes.Write([]byte(strconv.Itoa(len(a.Content))))
 	for _, element := range a.Content {
-		bytes.Write(element.Bytes())
 		writeTerminator(&bytes)
+		bytes.Write(element.Bytes())
 	}
-	writeTerminator(&bytes)
 	return bytes.Bytes()
 }
 

@@ -8,6 +8,7 @@ import (
 
 	"github.com/codecrafters-io/redis-starter-go/app/args"
 	"github.com/codecrafters-io/redis-starter-go/app/commands"
+	"github.com/codecrafters-io/redis-starter-go/app/replication"
 	"github.com/codecrafters-io/redis-starter-go/app/resp"
 )
 
@@ -31,6 +32,10 @@ func main() {
 	fmt.Printf("Listening on port %v\n", args.Port)
 
 	context := commands.NewContext(args)
+	slaveRole, ok := context.ReplicationRole.(replication.SlaveRole)
+	if ok {
+		go syncWithMaster(slaveRole)
+	}
 	for {
 		connection, err := l.Accept()
 		if err != nil {
@@ -60,4 +65,13 @@ func handleConnection(connection net.Conn, context *commands.Context) {
 			}
 		}
 	}
+}
+
+func syncWithMaster(slave replication.SlaveRole) {
+	conn, err := replication.ConnectToMaster(slave)
+	if err != nil {
+		fmt.Printf("failed to establish connection with master: %v", err)
+		return
+	}
+	conn.Handshake()
 }

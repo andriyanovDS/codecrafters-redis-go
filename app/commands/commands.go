@@ -20,7 +20,7 @@ type NullBulkString = resp.NullBulkString
 type Context struct {
 	args            args.Args
 	storage         map[string]entity
-	replicationRole replication.Role
+	ReplicationRole replication.Role
 	mutex           sync.Mutex
 }
 
@@ -33,7 +33,7 @@ func NewContext(args args.Args) Context {
 	return Context{
 		args:    args,
 		storage: make(map[string]entity),
-		replicationRole: func() replication.Role {
+		ReplicationRole: func() replication.Role {
 			if args.ReplicaOf.Host != "" {
 				return replication.SlaveRole{
 					Address: args.ReplicaOf,
@@ -152,7 +152,7 @@ func replicationInfo(context *Context) BulkString {
 	var builder strings.Builder
 	builder.WriteString("# Replication\r\n")
 	info := make(map[string]string)
-	context.replicationRole.CollectInfo(info)
+	context.ReplicationRole.CollectInfo(info)
 
 	for key, value := range info {
 		builder.WriteString(key)
