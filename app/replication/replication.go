@@ -28,7 +28,9 @@ func NewMaster() MasterRole {
 }
 
 type SlaveRole struct {
-	Address ReplicaAddress
+	Address      ReplicaAddress
+	masterReplId string
+	offset       uint64
 }
 
 type ReplicaAddress struct {
@@ -41,7 +43,8 @@ type Connection interface {
 }
 
 type SlaveConnection struct {
-	conn net.Conn
+	conn  net.Conn
+	slave SlaveRole
 }
 
 func ConnectToMaster(slave SlaveRole) (Connection, error) {
@@ -50,7 +53,8 @@ func ConnectToMaster(slave SlaveRole) (Connection, error) {
 		return nil, err
 	}
 	return SlaveConnection{
-		conn: conn,
+		conn:  conn,
+		slave: slave,
 	}, nil
 }
 
@@ -58,8 +62,10 @@ func (c SlaveConnection) Handshake(port uint16) error {
 	ping := resp.Array{
 		Content: []resp.RespDataType{resp.BulkString("ping")},
 	}
-	c.conn.Write(ping.Bytes())
-
+	_, err := c.conn.Write(ping.Bytes())
+	if err != nil {
+		return err
+	}
 	reader := bufio.NewReader(c.conn)
 	response, err := resp.Parse(reader)
 	if err != nil {
@@ -77,7 +83,10 @@ func (c SlaveConnection) Handshake(port uint16) error {
 			resp.BulkString(strconv.Itoa(int(port))),
 		},
 	}
-	c.conn.Write(lisneningPort.Bytes())
+	_, err = c.conn.Write(lisneningPort.Bytes())
+	if err != nil {
+		return err
+	}
 	response, err = resp.Parse(reader)
 	if err != nil {
 		return err
@@ -94,7 +103,10 @@ func (c SlaveConnection) Handshake(port uint16) error {
 			resp.BulkString("psync2"),
 		},
 	}
-	c.conn.Write(capabilities.Bytes())
+	_, err = c.conn.Write(capabilities.Bytes())
+	if err != nil {
+		return err
+	}
 	response, err = resp.Parse(reader)
 	if err != nil {
 		return err
@@ -102,6 +114,11 @@ func (c SlaveConnection) Handshake(port uint16) error {
 	command = response.(resp.SimpleString)
 	if command != "ok" {
 		return fmt.Errorf("unexpected response: %v", command)
+	}
+
+	_, err = c.conn.Write(c.slave.Psync().Bytes())
+	if err != nil {
+		return err
 	}
 	return nil
 }
@@ -124,4 +141,26 @@ func generateRepId() string {
 		builder.WriteRune(letter)
 	}
 	return builder.String()
+}
+
+func (s SlaveRole) Psync() resp.RespDataType {
+	var masterReplId string
+	if s.masterReplId != "" {
+		masterReplId = s.masterReplId
+	} else {
+		masterReplId = "?"
+	}
+	var offset int
+	if s.offset == 0 {
+		offset = -1
+	} else {
+		offset = int(s.offset)
+	}
+	return resp.Array{
+		Content: []resp.RespDataType{
+			resp.BulkString("PSYNC"),
+			resp.BulkString(masterReplId),
+			resp.BulkString(strconv.Itoa(offset)),
+		},
+	}
 }
