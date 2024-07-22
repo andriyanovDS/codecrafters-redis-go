@@ -2,17 +2,19 @@ package commands
 
 import (
 	"fmt"
+	"io"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/codecrafters-io/redis-starter-go/app/args"
+	"github.com/codecrafters-io/redis-starter-go/app/rdb"
 	"github.com/codecrafters-io/redis-starter-go/app/replication"
 	"github.com/codecrafters-io/redis-starter-go/app/resp"
 )
 
-type Command func(resp.Array, *Context) resp.RespDataType
+type Command func([]resp.RespDataType, io.Writer, *Context) error
 type BulkString = resp.BulkString
 type SimpleString = resp.SimpleString
 type NullBulkString = resp.NullBulkString
@@ -27,6 +29,16 @@ type Context struct {
 type entity struct {
 	value    string
 	expireAt time.Time
+}
+
+var Commands = map[string]Command{
+	"ping":     Ping,
+	"echo":     Echo,
+	"set":      Set,
+	"get":      Get,
+	"replconf": Replconf,
+	"psync":    Psync,
+	"info":     Info,
 }
 
 func NewContext(args args.Args) Context {
@@ -46,57 +58,46 @@ func NewContext(args args.Args) Context {
 	}
 }
 
-func Ping(resp resp.Array, _ *Context) resp.RespDataType {
-	len := len(resp.Content)
-	if len == 0 || len > 2 {
-		return nil
-	}
-	command := resp.Content[0].(BulkString)
-	if command != "ping" {
-		return nil
-	}
-	if len == 2 {
-		return resp.Content[1]
+func Ping(args []resp.RespDataType, writer io.Writer, _ *Context) error {
+	len := len(args)
+	var response resp.RespDataType
+	if len == 1 {
+		response = args[1]
 	} else {
-		return BulkString("PONG")
+		response = BulkString("PONG")
 	}
+	_, err := writer.Write(response.Bytes())
+	return err
 }
 
-func Echo(resp resp.Array, _ *Context) resp.RespDataType {
-	if len(resp.Content) != 2 {
-		return nil
+func Echo(args []resp.RespDataType, writer io.Writer, _ *Context) error {
+	if len(args) != 1 {
+		return fmt.Errorf("ECHO command has 1 argument")
 	}
-	command := resp.Content[0].(BulkString)
-	if command != "echo" {
-		return nil
-	}
-	return resp.Content[1]
+	_, err := writer.Write(args[0].Bytes())
+	return err
 }
 
-func Set(response resp.Array, context *Context) resp.RespDataType {
-	if len(response.Content) == 0 {
-		return nil
+func Set(args []resp.RespDataType, writer io.Writer, context *Context) error {
+	if len(args) < 2 {
+		return fmt.Errorf("SET command has at least 2 arguments")
 	}
-	command := response.Content[0].(BulkString)
-	if command != "set" {
-		return nil
-	}
-	key := resp.String(response.Content[1])
+	key := resp.String(args[0])
 	entity := entity{
-		value:    resp.String(response.Content[2]),
+		value:    resp.String(args[1]),
 		expireAt: time.Time{},
 	}
 
-	var argIndex = 3
+	var argIndex = 2
 	for {
-		if argIndex >= len(response.Content) {
+		if argIndex >= len(args) {
 			break
 		}
 		func() {
 			defer func() { argIndex += 2 }()
-			arg := resp.String(response.Content[argIndex])
+			arg := resp.String(args[argIndex])
 			if strings.ToLower(arg) == "px" {
-				ms, err := strconv.Atoi(resp.String(response.Content[argIndex+1]))
+				ms, err := strconv.Atoi(resp.String(args[argIndex+1]))
 				if err != nil {
 					fmt.Printf("expiry time must be a positive integer")
 					return
@@ -110,66 +111,56 @@ func Set(response resp.Array, context *Context) resp.RespDataType {
 	context.mutex.Lock()
 	context.storage[key] = entity
 	context.mutex.Unlock()
-	return SimpleString("OK")
+	_, err := writer.Write(SimpleString("OK").Bytes())
+	return err
 }
 
-func Get(response resp.Array, context *Context) resp.RespDataType {
-	if len(response.Content) != 2 {
-		return nil
+func Get(args []resp.RespDataType, writer io.Writer, context *Context) error {
+	if len(args) != 1 {
+		return fmt.Errorf("GET command has 1 argument")
 	}
-	command := response.Content[0].(BulkString)
-	if command != "get" {
-		return nil
-	}
-	key := resp.String(response.Content[1])
+	key := resp.String(args[0])
 
 	context.mutex.Lock()
 	entity, ok := context.storage[key]
 	context.mutex.Unlock()
 
+	var resp resp.RespDataType
 	if !ok {
-		return NullBulkString{}
-	}
-	if !entity.expireAt.IsZero() && entity.expireAt.Before(time.Now()) {
-		return NullBulkString{}
+		resp = NullBulkString{}
+	} else if !entity.expireAt.IsZero() && entity.expireAt.Before(time.Now()) {
+		resp = NullBulkString{}
 	} else {
-		return BulkString(entity.value)
+		resp = BulkString(entity.value)
 	}
+	_, err := writer.Write(resp.Bytes())
+	return err
 }
 
-func Replconf(resp resp.Array, context *Context) resp.RespDataType {
-	if len(resp.Content) == 0 {
-		return nil
-	}
-	command := resp.Content[0].(BulkString)
-	if command != "replconf" {
-		return nil
-	}
-	return SimpleString("OK")
+func Replconf(_ []resp.RespDataType, writer io.Writer, _ *Context) error {
+	_, err := writer.Write(SimpleString("OK").Bytes())
+	return err
 }
 
-func Psync(resp resp.Array, context *Context) resp.RespDataType {
-	if len(resp.Content) == 0 {
-		return nil
-	}
-	command := resp.Content[0].(BulkString)
-	if command != "psync" {
-		return nil
-	}
+func Psync(_ []resp.RespDataType, writer io.Writer, context *Context) error {
 	master := context.ReplicationRole.(replication.MasterRole)
 	response := fmt.Sprintf("FULLRESYNC %v %d", master.Id, master.Offset)
-	return SimpleString(response)
+	_, err := writer.Write(SimpleString(response).Bytes())
+	if err != nil {
+		return err
+	}
+	emptyRdp, err := rdb.Empty()
+	if err != nil {
+		return err
+	}
+	syncResp := BulkString(string(emptyRdp)).Bytes()
+	_, err = writer.Write(syncResp[:len(syncResp)-2])
+	return err
 }
 
-func Info(resp resp.Array, context *Context) resp.RespDataType {
-	if len(resp.Content) == 0 {
-		return nil
-	}
-	command := resp.Content[0].(BulkString)
-	if command != "info" {
-		return nil
-	}
-	return replicationInfo(context)
+func Info(_ []resp.RespDataType, writer io.Writer, context *Context) error {
+	_, err := writer.Write(replicationInfo(context).Bytes())
+	return err
 }
 
 func replicationInfo(context *Context) BulkString {

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"strings"
 
 	"github.com/codecrafters-io/redis-starter-go/app/args"
 	"github.com/codecrafters-io/redis-starter-go/app/commands"
@@ -13,16 +14,7 @@ import (
 )
 
 type Array = resp.Array
-
-var redisCommands = []commands.Command{
-	commands.Echo,
-	commands.Ping,
-	commands.Set,
-	commands.Get,
-	commands.Info,
-	commands.Replconf,
-	commands.Psync,
-}
+type BulkString = resp.BulkString
 
 func main() {
 	args := args.ParseArgs()
@@ -56,15 +48,23 @@ func handleConnection(connection net.Conn, context *commands.Context) {
 	for {
 		resp, err := resp.Parse(reader)
 		if err != nil {
-			fmt.Printf("RESP parsing failed: %v\n", err)
+			fmt.Printf("RESP parsing failed: %s\n", err)
 			return
 		}
 		request := resp.(Array)
-		for _, command := range redisCommands {
-			response := command(request, context)
-			if response != nil {
-				connection.Write(response.Bytes())
-			}
+		if len(request.Content) == 0 {
+			continue
+		}
+		command := string(request.Content[0].(BulkString))
+		handler, ok := commands.Commands[strings.ToLower(command)]
+		if !ok {
+			fmt.Printf("unknown command received: %v\n", command)
+			continue
+		}
+		err = handler(request.Content[1:], connection, context)
+		if err != nil {
+			fmt.Printf("%s command handling failure: %v\n", command, err)
+			continue
 		}
 	}
 }
