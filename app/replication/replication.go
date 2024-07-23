@@ -64,6 +64,7 @@ type Connection interface {
 	io.Reader
 	io.Writer
 	Handshake(port uint16) error
+	Ack() error
 }
 
 type SlaveConnection struct {
@@ -153,6 +154,18 @@ func (c *SlaveConnection) Read(p []byte) (n int, err error) {
 
 func (c *SlaveConnection) Write(_ []byte) (int, error) {
 	return 0, nil
+}
+
+func (c *SlaveConnection) Ack() error {
+	response := resp.Array{
+		Content: []resp.RespDataType{
+			resp.BulkString("REPLCONF"),
+			resp.BulkString("ACK"),
+			resp.BulkString(strconv.Itoa(int(c.slave.offset))),
+		},
+	}
+	_, err := c.conn.Write(response.Bytes())
+	return err
 }
 
 func (r *MasterRole) CollectInfo(info map[string]string) {

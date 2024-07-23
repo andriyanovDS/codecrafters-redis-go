@@ -33,13 +33,13 @@ type entity struct {
 }
 
 var Commands = map[string]Command{
-	"ping":     Ping,
-	"echo":     Echo,
-	"set":      Set,
-	"get":      Get,
-	"replconf": Replconf,
-	"psync":    Psync,
-	"info":     Info,
+	"ping":     ping,
+	"echo":     echo,
+	"set":      set,
+	"get":      get,
+	"replconf": replconf,
+	"psync":    psync,
+	"info":     info,
 }
 
 func NewContext(args args.Args) Context {
@@ -59,7 +59,7 @@ func NewContext(args args.Args) Context {
 	}
 }
 
-func Ping(args []resp.RespDataType, _ resp.RespDataType, writer io.Writer, _ *Context) error {
+func ping(args []resp.RespDataType, _ resp.RespDataType, writer io.Writer, _ *Context) error {
 	len := len(args)
 	var response resp.RespDataType
 	if len == 1 {
@@ -71,7 +71,7 @@ func Ping(args []resp.RespDataType, _ resp.RespDataType, writer io.Writer, _ *Co
 	return err
 }
 
-func Echo(args []resp.RespDataType, _ resp.RespDataType, writer io.Writer, _ *Context) error {
+func echo(args []resp.RespDataType, _ resp.RespDataType, writer io.Writer, _ *Context) error {
 	if len(args) != 1 {
 		return fmt.Errorf("ECHO command has 1 argument")
 	}
@@ -79,7 +79,7 @@ func Echo(args []resp.RespDataType, _ resp.RespDataType, writer io.Writer, _ *Co
 	return err
 }
 
-func Set(args []resp.RespDataType, request resp.RespDataType, writer io.Writer, context *Context) error {
+func set(args []resp.RespDataType, request resp.RespDataType, writer io.Writer, context *Context) error {
 	if len(args) < 2 {
 		return fmt.Errorf("SET command has at least 2 arguments")
 	}
@@ -122,7 +122,7 @@ func Set(args []resp.RespDataType, request resp.RespDataType, writer io.Writer, 
 	return err
 }
 
-func Get(args []resp.RespDataType, _ resp.RespDataType, writer io.Writer, context *Context) error {
+func get(args []resp.RespDataType, _ resp.RespDataType, writer io.Writer, context *Context) error {
 	if len(args) != 1 {
 		return fmt.Errorf("GET command has 1 argument")
 	}
@@ -144,12 +144,21 @@ func Get(args []resp.RespDataType, _ resp.RespDataType, writer io.Writer, contex
 	return err
 }
 
-func Replconf(_ []resp.RespDataType, _ resp.RespDataType, writer io.Writer, context *Context) error {
-	_, err := writer.Write(SimpleString("OK").Bytes())
-	return err
+func replconf(args []resp.RespDataType, _ resp.RespDataType, writer io.Writer, context *Context) error {
+	if len(args) == 0 {
+		return fmt.Errorf("replconf must contain arguments")
+	}
+	command := args[0].(BulkString)
+	if command == "getack" {
+		conn := writer.(*replication.SlaveConnection)
+		return conn.Ack()
+	} else {
+		_, err := writer.Write(SimpleString("OK").Bytes())
+		return err
+	}
 }
 
-func Psync(_ []resp.RespDataType, _ resp.RespDataType, writer io.Writer, context *Context) error {
+func psync(_ []resp.RespDataType, _ resp.RespDataType, writer io.Writer, context *Context) error {
 	master := context.ReplicationRole.(*replication.MasterRole)
 	response := fmt.Sprintf("FULLRESYNC %v %d", master.Id, master.Offset)
 	_, err := writer.Write(SimpleString(response).Bytes())
@@ -168,7 +177,7 @@ func Psync(_ []resp.RespDataType, _ resp.RespDataType, writer io.Writer, context
 	return err
 }
 
-func Info(_ []resp.RespDataType, _ resp.RespDataType, writer io.Writer, context *Context) error {
+func info(_ []resp.RespDataType, _ resp.RespDataType, writer io.Writer, context *Context) error {
 	_, err := writer.Write(replicationInfo(context).Bytes())
 	return err
 }
