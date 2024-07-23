@@ -7,6 +7,7 @@ import (
 	"net"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/codecrafters-io/redis-starter-go/app/resp"
 )
@@ -16,12 +17,32 @@ type Role interface {
 }
 
 type MasterRole struct {
-	Id     string
-	Offset uint64
+	Id       string
+	Offset   uint64
+	mutex    sync.Mutex
+	replicas []net.Conn
 }
 
-func NewMaster() MasterRole {
-	return MasterRole{
+func (m *MasterRole) AddReplica(conn net.Conn) {
+	m.mutex.Lock()
+	m.replicas = append(m.replicas, conn)
+	m.mutex.Unlock()
+}
+
+func (m *MasterRole) Propagate(request resp.RespDataType) {
+	m.mutex.Lock()
+	defer m.mutex.Unlock()
+	if len(m.replicas) == 0 {
+		return
+	}
+	bytes := request.Bytes()
+	for _, conn := range m.replicas {
+		go conn.Write(bytes)
+	}
+}
+
+func NewMaster() *MasterRole {
+	return &MasterRole{
 		Id:     generateRepId(),
 		Offset: 0,
 	}
@@ -52,13 +73,13 @@ func ConnectToMaster(slave SlaveRole) (Connection, error) {
 	if err != nil {
 		return nil, err
 	}
-	return SlaveConnection{
+	return &SlaveConnection{
 		conn:  conn,
 		slave: slave,
 	}, nil
 }
 
-func (c SlaveConnection) Handshake(port uint16) error {
+func (c *SlaveConnection) Handshake(port uint16) error {
 	ping := resp.Array{
 		Content: []resp.RespDataType{resp.BulkString("ping")},
 	}
@@ -123,7 +144,7 @@ func (c SlaveConnection) Handshake(port uint16) error {
 	return nil
 }
 
-func (r MasterRole) CollectInfo(info map[string]string) {
+func (r *MasterRole) CollectInfo(info map[string]string) {
 	info["role"] = "master"
 	info["master_replid"] = r.Id
 	info["master_repl_offset"] = strconv.FormatUint(r.Offset, 10)

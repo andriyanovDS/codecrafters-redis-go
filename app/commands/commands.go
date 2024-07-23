@@ -3,6 +3,7 @@ package commands
 import (
 	"fmt"
 	"io"
+	"net"
 	"strconv"
 	"strings"
 	"sync"
@@ -14,7 +15,7 @@ import (
 	"github.com/codecrafters-io/redis-starter-go/app/resp"
 )
 
-type Command func([]resp.RespDataType, io.Writer, *Context) error
+type Command func([]resp.RespDataType, resp.RespDataType, io.Writer, *Context) error
 type BulkString = resp.BulkString
 type SimpleString = resp.SimpleString
 type NullBulkString = resp.NullBulkString
@@ -58,7 +59,7 @@ func NewContext(args args.Args) Context {
 	}
 }
 
-func Ping(args []resp.RespDataType, writer io.Writer, _ *Context) error {
+func Ping(args []resp.RespDataType, _ resp.RespDataType, writer io.Writer, _ *Context) error {
 	len := len(args)
 	var response resp.RespDataType
 	if len == 1 {
@@ -70,7 +71,7 @@ func Ping(args []resp.RespDataType, writer io.Writer, _ *Context) error {
 	return err
 }
 
-func Echo(args []resp.RespDataType, writer io.Writer, _ *Context) error {
+func Echo(args []resp.RespDataType, _ resp.RespDataType, writer io.Writer, _ *Context) error {
 	if len(args) != 1 {
 		return fmt.Errorf("ECHO command has 1 argument")
 	}
@@ -78,7 +79,7 @@ func Echo(args []resp.RespDataType, writer io.Writer, _ *Context) error {
 	return err
 }
 
-func Set(args []resp.RespDataType, writer io.Writer, context *Context) error {
+func Set(args []resp.RespDataType, request resp.RespDataType, writer io.Writer, context *Context) error {
 	if len(args) < 2 {
 		return fmt.Errorf("SET command has at least 2 arguments")
 	}
@@ -111,11 +112,17 @@ func Set(args []resp.RespDataType, writer io.Writer, context *Context) error {
 	context.mutex.Lock()
 	context.storage[key] = entity
 	context.mutex.Unlock()
+
+	master, ok := context.ReplicationRole.(*replication.MasterRole)
+	if ok {
+		master.Propagate(request)
+	}
+
 	_, err := writer.Write(SimpleString("OK").Bytes())
 	return err
 }
 
-func Get(args []resp.RespDataType, writer io.Writer, context *Context) error {
+func Get(args []resp.RespDataType, _ resp.RespDataType, writer io.Writer, context *Context) error {
 	if len(args) != 1 {
 		return fmt.Errorf("GET command has 1 argument")
 	}
@@ -137,13 +144,13 @@ func Get(args []resp.RespDataType, writer io.Writer, context *Context) error {
 	return err
 }
 
-func Replconf(_ []resp.RespDataType, writer io.Writer, _ *Context) error {
+func Replconf(_ []resp.RespDataType, _ resp.RespDataType, writer io.Writer, context *Context) error {
 	_, err := writer.Write(SimpleString("OK").Bytes())
 	return err
 }
 
-func Psync(_ []resp.RespDataType, writer io.Writer, context *Context) error {
-	master := context.ReplicationRole.(replication.MasterRole)
+func Psync(_ []resp.RespDataType, _ resp.RespDataType, writer io.Writer, context *Context) error {
+	master := context.ReplicationRole.(*replication.MasterRole)
 	response := fmt.Sprintf("FULLRESYNC %v %d", master.Id, master.Offset)
 	_, err := writer.Write(SimpleString(response).Bytes())
 	if err != nil {
@@ -155,10 +162,13 @@ func Psync(_ []resp.RespDataType, writer io.Writer, context *Context) error {
 	}
 	syncResp := BulkString(string(emptyRdp)).Bytes()
 	_, err = writer.Write(syncResp[:len(syncResp)-2])
+	if err == nil {
+		master.AddReplica(writer.(net.Conn))
+	}
 	return err
 }
 
-func Info(_ []resp.RespDataType, writer io.Writer, context *Context) error {
+func Info(_ []resp.RespDataType, _ resp.RespDataType, writer io.Writer, context *Context) error {
 	_, err := writer.Write(replicationInfo(context).Bytes())
 	return err
 }

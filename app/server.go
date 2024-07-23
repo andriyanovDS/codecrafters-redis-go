@@ -61,7 +61,7 @@ func handleConnection(connection net.Conn, context *commands.Context) {
 			fmt.Printf("unknown command received: %v\n", command)
 			continue
 		}
-		err = handler(request.Content[1:], connection, context)
+		err = handler(request.Content[1:], resp, connection, context)
 		if err != nil {
 			fmt.Printf("%s command handling failure: %v\n", command, err)
 			continue
