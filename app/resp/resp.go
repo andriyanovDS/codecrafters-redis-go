@@ -133,7 +133,7 @@ func readExact(reader *bufio.Reader, count int) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	for _, char := range [2]byte {'\r', '\n'} {
+	for _, char := range [2]byte{'\r', '\n'} {
 		next, err := reader.ReadByte()
 		if err != nil || next != char {
 			reader.UnreadByte()

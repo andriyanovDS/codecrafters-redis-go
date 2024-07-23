@@ -52,7 +52,7 @@ func NewMaster() *MasterRole {
 type SlaveRole struct {
 	Address      ReplicaAddress
 	masterReplId string
-	offset       uint64
+	Offset       uint64
 }
 
 type ReplicaAddress struct {
@@ -63,42 +63,63 @@ type ReplicaAddress struct {
 type Connection interface {
 	io.Reader
 	io.Writer
-	Handshake(port uint16) error
+	Handshake(port uint16) (*bufio.Reader, error)
 	Ack() error
 }
 
 type SlaveConnection struct {
-	conn  net.Conn
-	slave SlaveRole
+	conn   net.Conn
+	reader *slaveReader
+	slave  *SlaveRole
 }
 
-func ConnectToMaster(slave SlaveRole) (Connection, error) {
+type slaveReader struct {
+	reader             io.Reader
+	handshakeCompleted bool
+	bytesRead          uint64
+}
+
+func (r *slaveReader) Read(b []byte) (int, error) {
+	n, err := r.reader.Read(b)
+	if r.handshakeCompleted {
+		r.bytesRead += uint64(n)
+	}
+	return n, err
+}
+
+func (r *slaveReader) markHandshakeAsCompleted(offset uint64) {
+	r.handshakeCompleted = true
+	r.bytesRead = offset
+}
+
+func ConnectToMaster(slave *SlaveRole) (Connection, error) {
 	conn, err := net.Dial("tcp", fmt.Sprintf("%v:%d", slave.Address.Host, slave.Address.Port))
 	if err != nil {
 		return nil, err
 	}
 	return &SlaveConnection{
-		conn:  conn,
-		slave: slave,
+		conn:   conn,
+		reader: &slaveReader{reader: conn},
+		slave:  slave,
 	}, nil
 }
 
-func (c *SlaveConnection) Handshake(port uint16) error {
+func (c *SlaveConnection) Handshake(port uint16) (*bufio.Reader, error) {
 	ping := resp.Array{
 		Content: []resp.RespDataType{resp.BulkString("ping")},
 	}
 	_, err := c.conn.Write(ping.Bytes())
 	if err != nil {
-		return err
+		return nil, err
 	}
-	reader := bufio.NewReader(c.conn)
+	reader := bufio.NewReader(c.reader)
 	response, err := resp.Parse(reader)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	command := response.(resp.SimpleString)
 	if command != "pong" {
-		return fmt.Errorf("unexpected response: %v", command)
+		return nil, fmt.Errorf("unexpected response: %v", command)
 	}
 
 	lisneningPort := resp.Array{
@@ -110,15 +131,15 @@ func (c *SlaveConnection) Handshake(port uint16) error {
 	}
 	_, err = c.conn.Write(lisneningPort.Bytes())
 	if err != nil {
-		return err
+		return nil, err
 	}
 	response, err = resp.Parse(reader)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	command = response.(resp.SimpleString)
 	if command != "ok" {
-		return fmt.Errorf("unexpected response: %v", command)
+		return nil, fmt.Errorf("unexpected response: %v", command)
 	}
 
 	capabilities := resp.Array{
@@ -130,29 +151,49 @@ func (c *SlaveConnection) Handshake(port uint16) error {
 	}
 	_, err = c.conn.Write(capabilities.Bytes())
 	if err != nil {
-		return err
+		return nil, err
 	}
 	response, err = resp.Parse(reader)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	command = response.(resp.SimpleString)
 	if command != "ok" {
-		return fmt.Errorf("unexpected response: %v", command)
+		return nil, fmt.Errorf("unexpected response: %v", command)
 	}
 
 	_, err = c.conn.Write(c.slave.Psync().Bytes())
 	if err != nil {
-		return err
+		return nil, err
 	}
-	return nil
+
+	response, err = resp.Parse(reader)
+	if err != nil {
+		return nil, err
+	}
+	command = response.(resp.SimpleString)
+	if strings.HasPrefix(string(command), "FULLRESYNC") {
+		return nil, fmt.Errorf("unexpected response: %v", command)
+	}
+
+	response, err = resp.Parse(reader)
+	if err != nil {
+		return nil, err
+	}
+	rdpCommand := response.(resp.BulkString)
+	if strings.HasPrefix(string(rdpCommand), "REDIS") {
+		return nil, fmt.Errorf("unexpected response: %v", command)
+	}
+	c.reader.markHandshakeAsCompleted(uint64(reader.Buffered()))
+	return reader, nil
 }
 
 func (c *SlaveConnection) Read(p []byte) (n int, err error) {
-	return c.conn.Read(p)
+	return c.reader.Read(p)
 }
 
 func (c *SlaveConnection) Write(_ []byte) (int, error) {
+	c.slave.Offset = c.reader.bytesRead
 	return 0, nil
 }
 
@@ -161,7 +202,7 @@ func (c *SlaveConnection) Ack() error {
 		Content: []resp.RespDataType{
 			resp.BulkString("REPLCONF"),
 			resp.BulkString("ACK"),
-			resp.BulkString(strconv.Itoa(int(c.slave.offset))),
+			resp.BulkString(strconv.Itoa(int(c.slave.Offset))),
 		},
 	}
 	_, err := c.conn.Write(response.Bytes())
@@ -196,10 +237,10 @@ func (s SlaveRole) Psync() resp.RespDataType {
 		masterReplId = "?"
 	}
 	var offset int
-	if s.offset == 0 {
+	if s.Offset == 0 {
 		offset = -1
 	} else {
-		offset = int(s.offset)
+		offset = int(s.Offset)
 	}
 	return resp.Array{
 		Content: []resp.RespDataType{

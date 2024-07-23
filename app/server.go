@@ -29,7 +29,7 @@ func main() {
 	context := commands.NewContext(args)
 	slaveRole, ok := context.ReplicationRole.(replication.SlaveRole)
 	if ok {
-		go syncWithMaster(slaveRole, args.Port, &context)
+		go syncWithMaster(&slaveRole, args.Port, &context)
 	}
 	for {
 		connection, err := l.Accept()
@@ -40,13 +40,13 @@ func main() {
 		fmt.Println("Connection accepted")
 		go func() {
 			defer connection.Close()
-			listenCommands(connection, &context)
+			reader := bufio.NewReader(connection)
+			listenCommands(reader, connection, &context)
 		}()
 	}
 }
 
-func listenCommands(conn io.ReadWriter, context *commands.Context) {
-	reader := bufio.NewReader(conn)
+func listenCommands(reader *bufio.Reader, writer io.Writer, context *commands.Context) {
 	for {
 		resp, err := resp.Parse(reader)
 		if err != nil {
@@ -67,7 +67,7 @@ func listenCommands(conn io.ReadWriter, context *commands.Context) {
 			fmt.Printf("unknown command received: %v\n", command)
 			continue
 		}
-		err = handler(request.Content[1:], resp, conn, context)
+		err = handler(request.Content[1:], resp, writer, context)
 		if err != nil {
 			fmt.Printf("%s command handling failure: %v\n", command, err)
 			continue
@@ -75,17 +75,17 @@ func listenCommands(conn io.ReadWriter, context *commands.Context) {
 	}
 }
 
-func syncWithMaster(slave replication.SlaveRole, listeningPort uint16, context *commands.Context) {
+func syncWithMaster(slave *replication.SlaveRole, listeningPort uint16, context *commands.Context) {
 	conn, err := replication.ConnectToMaster(slave)
 	if err != nil {
 		fmt.Printf("failed to establish connection with master: %v\n", err)
 		return
 	}
 	fmt.Printf("connection with master established. Port: %d\n", listeningPort)
-	err = conn.Handshake(listeningPort)
+	reader, err := conn.Handshake(listeningPort)
 	if err != nil {
 		fmt.Printf("handshake failed: %v\n", err)
 	}
 	fmt.Printf("handshake with master completed. Port: %d\n", listeningPort)
-	listenCommands(conn, context)
+	listenCommands(reader, conn, context)
 }
