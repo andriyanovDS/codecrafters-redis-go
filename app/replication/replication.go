@@ -3,6 +3,7 @@ package replication
 import (
 	"bufio"
 	"fmt"
+	"io"
 	"math/rand"
 	"net"
 	"strconv"
@@ -60,6 +61,8 @@ type ReplicaAddress struct {
 }
 
 type Connection interface {
+	io.Reader
+	io.Writer
 	Handshake(port uint16) error
 }
 
@@ -142,6 +145,14 @@ func (c *SlaveConnection) Handshake(port uint16) error {
 		return err
 	}
 	return nil
+}
+
+func (c *SlaveConnection) Read(p []byte) (n int, err error) {
+	return c.conn.Read(p)
+}
+
+func (c *SlaveConnection) Write(_ []byte) (int, error) {
+	return 0, nil
 }
 
 func (r *MasterRole) CollectInfo(info map[string]string) {

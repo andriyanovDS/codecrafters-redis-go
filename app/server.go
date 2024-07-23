@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"strings"
@@ -28,7 +29,7 @@ func main() {
 	context := commands.NewContext(args)
 	slaveRole, ok := context.ReplicationRole.(replication.SlaveRole)
 	if ok {
-		go syncWithMaster(slaveRole, args.Port)
+		go syncWithMaster(slaveRole, args.Port, &context)
 	}
 	for {
 		connection, err := l.Accept()
@@ -37,21 +38,26 @@ func main() {
 			continue
 		}
 		fmt.Println("Connection accepted")
-		go handleConnection(connection, &context)
+		go func() {
+			defer connection.Close()
+			listenCommands(connection, &context)
+		}()
 	}
 }
 
-func handleConnection(connection net.Conn, context *commands.Context) {
-	defer connection.Close()
-
-	reader := bufio.NewReader(connection)
+func listenCommands(conn io.ReadWriter, context *commands.Context) {
+	reader := bufio.NewReader(conn)
 	for {
 		resp, err := resp.Parse(reader)
 		if err != nil {
 			fmt.Printf("RESP parsing failed: %s\n", err)
 			return
 		}
-		request := resp.(Array)
+		request, ok := resp.(Array)
+		if !ok {
+			fmt.Printf("ignored command: %v\n", resp)
+			continue
+		}
 		if len(request.Content) == 0 {
 			continue
 		}
@@ -61,7 +67,7 @@ func handleConnection(connection net.Conn, context *commands.Context) {
 			fmt.Printf("unknown command received: %v\n", command)
 			continue
 		}
-		err = handler(request.Content[1:], resp, connection, context)
+		err = handler(request.Content[1:], resp, conn, context)
 		if err != nil {
 			fmt.Printf("%s command handling failure: %v\n", command, err)
 			continue
@@ -69,14 +75,17 @@ func handleConnection(connection net.Conn, context *commands.Context) {
 	}
 }
 
-func syncWithMaster(slave replication.SlaveRole, listeningPort uint16) {
+func syncWithMaster(slave replication.SlaveRole, listeningPort uint16, context *commands.Context) {
 	conn, err := replication.ConnectToMaster(slave)
 	if err != nil {
-		fmt.Printf("failed to establish connection with master: %v", err)
+		fmt.Printf("failed to establish connection with master: %v\n", err)
 		return
 	}
+	fmt.Printf("connection with master established. Port: %d\n", listeningPort)
 	err = conn.Handshake(listeningPort)
 	if err != nil {
-		fmt.Printf("handshake failed: %v", err)
+		fmt.Printf("handshake failed: %v\n", err)
 	}
+	fmt.Printf("handshake with master completed. Port: %d\n", listeningPort)
+	listenCommands(conn, context)
 }

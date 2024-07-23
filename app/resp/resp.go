@@ -128,16 +128,20 @@ func readNext(reader *bufio.Reader) ([]byte, error) {
 }
 
 func readExact(reader *bufio.Reader, count int) ([]byte, error) {
-	buf := make([]byte, count+2)
+	buf := make([]byte, count)
 	_, err := io.ReadFull(reader, buf)
 	if err != nil {
 		return nil, err
 	}
-	if buf[count] == '\r' && buf[count+1] == '\n' {
-		return buf[0:count], nil
-	} else {
-		return nil, errors.New("invalid RESP termination")
+	for _, char := range [2]byte {'\r', '\n'} {
+		next, err := reader.ReadByte()
+		if err != nil || next != char {
+			reader.UnreadByte()
+			break
+		}
 	}
+
+	return buf, nil
 }
 
 func readInt(reader *bufio.Reader) (int64, error) {
