@@ -191,16 +191,14 @@ func wait(args []resp.RespDataType, _ resp.RespDataType, writer io.Writer, conte
 	if err != nil {
 		return err
 	}
-	if numOfReplicas <= 0 {
-		_, err = writer.Write(resp.Integer(0).Bytes())
-		return err
-	}
 	timeout, err := strconv.Atoi(string(args[1].(BulkString)))
 	if err != nil {
 		return err
 	}
-	fmt.Printf("Received WAIT timeout %d, numreplicas: %d", timeout, numOfReplicas)
-	return nil
+	master := context.ReplicationRole.(*replication.MasterRole)
+	numOfReplicas = master.Wait(numOfReplicas, time.Duration(timeout)*time.Millisecond)
+	_, err = writer.Write(resp.Integer(numOfReplicas).Bytes())
+	return err
 }
 
 func replicationInfo(context *Context) BulkString {

@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/codecrafters-io/redis-starter-go/app/resp"
 )
@@ -193,6 +194,13 @@ func (r *MasterRole) CollectInfo(info map[string]string) {
 	info["role"] = "master"
 	info["master_replid"] = r.Id
 	info["master_repl_offset"] = strconv.FormatUint(r.Offset, 10)
+}
+
+func (r *MasterRole) Wait(numOfReplicas int, timeout time.Duration) int {
+	if numOfReplicas <= 0 {
+		return 0
+	}
+	return len(r.replicas)
 }
 
 func (r SlaveRole) CollectInfo(info map[string]string) {
