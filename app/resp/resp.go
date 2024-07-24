@@ -38,7 +38,48 @@ type SimpleString string
 type Integer int64
 type NullBulkString struct{}
 
-func Parse(reader *bufio.Reader) (RespDataType, error) {
+type BufReader struct {
+	reader    *bufio.Reader
+	BytesRead uint64
+}
+
+func NewReader(reader io.Reader) *BufReader {
+	return &BufReader{
+		reader: bufio.NewReader(reader),
+	}
+}
+
+func (r *BufReader) Read(p []byte) (int, error) {
+	len, err := r.reader.Read(p)
+	r.BytesRead += uint64(len)
+	return len, err
+}
+
+func (r *BufReader) ReadByte() (byte, error) {
+	b, err := r.reader.ReadByte()
+	if err == nil {
+		r.BytesRead += 1
+	}
+	return b, err
+}
+
+func (r *BufReader) ReadBytes(delim byte) ([]byte, error) {
+	b, err := r.reader.ReadBytes(delim)
+	if err == nil {
+		r.BytesRead += uint64(len(b))
+	}
+	return b, err
+}
+
+func (r *BufReader) UnreadByte() error {
+	err := r.reader.UnreadByte()
+	if err == nil {
+		r.BytesRead -= 1
+	}
+	return err
+}
+
+func Parse(reader *BufReader) (RespDataType, error) {
 	firstByte, err := reader.ReadByte()
 	if err != nil {
 		fmt.Printf("failed to read byte: %v", err)
@@ -108,7 +149,7 @@ func Parse(reader *bufio.Reader) (RespDataType, error) {
 	}
 }
 
-func readNext(reader *bufio.Reader) ([]byte, error) {
+func readNext(reader *BufReader) ([]byte, error) {
 	var bytes bytes.Buffer
 	for {
 		next, err := reader.ReadBytes('\n')
@@ -127,7 +168,7 @@ func readNext(reader *bufio.Reader) ([]byte, error) {
 	}
 }
 
-func readExact(reader *bufio.Reader, count int) ([]byte, error) {
+func readExact(reader *BufReader, count int) ([]byte, error) {
 	buf := make([]byte, count)
 	_, err := io.ReadFull(reader, buf)
 	if err != nil {
@@ -144,7 +185,7 @@ func readExact(reader *bufio.Reader, count int) ([]byte, error) {
 	return buf, nil
 }
 
-func readInt(reader *bufio.Reader) (int64, error) {
+func readInt(reader *BufReader) (int64, error) {
 	lengthBytes, err := readNext(reader)
 	if err != nil {
 		fmt.Printf("unable to read length: %v", err)

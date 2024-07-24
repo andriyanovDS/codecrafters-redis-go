@@ -40,6 +40,7 @@ var Commands = map[string]Command{
 	"replconf": replconf,
 	"psync":    psync,
 	"info":     info,
+	"wait":     wait,
 }
 
 func NewContext(args args.Args) Context {
@@ -180,6 +181,26 @@ func psync(_ []resp.RespDataType, _ resp.RespDataType, writer io.Writer, context
 func info(_ []resp.RespDataType, _ resp.RespDataType, writer io.Writer, context *Context) error {
 	_, err := writer.Write(replicationInfo(context).Bytes())
 	return err
+}
+
+func wait(args []resp.RespDataType, _ resp.RespDataType, writer io.Writer, context *Context) error {
+	if len(args) != 2 {
+		return fmt.Errorf("numreplicas and timeout must be specified")
+	}
+	numOfReplicas, err := strconv.Atoi(string(args[0].(BulkString)))
+	if err != nil {
+		return err
+	}
+	if numOfReplicas <= 0 {
+		_, err = writer.Write(resp.Integer(0).Bytes())
+		return err
+	}
+	timeout, err := strconv.Atoi(string(args[1].(BulkString)))
+	if err != nil {
+		return err
+	}
+	fmt.Printf("Received WAIT timeout %d, numreplicas: %d", timeout, numOfReplicas)
+	return nil
 }
 
 func replicationInfo(context *Context) BulkString {

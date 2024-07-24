@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bufio"
 	"fmt"
 	"io"
 	"net"
@@ -40,13 +39,13 @@ func main() {
 		fmt.Println("Connection accepted")
 		go func() {
 			defer connection.Close()
-			reader := bufio.NewReader(connection)
+			reader := resp.NewReader(connection)
 			listenCommands(reader, connection, &context)
 		}()
 	}
 }
 
-func listenCommands(reader *bufio.Reader, writer io.Writer, context *commands.Context) {
+func listenCommands(reader *resp.BufReader, writer io.Writer, context *commands.Context) {
 	for {
 		resp, err := resp.Parse(reader)
 		if err != nil {
@@ -82,10 +81,10 @@ func syncWithMaster(slave *replication.SlaveRole, listeningPort uint16, context 
 		return
 	}
 	fmt.Printf("connection with master established. Port: %d\n", listeningPort)
-	reader, err := conn.Handshake(listeningPort)
+	err = conn.Handshake(listeningPort)
 	if err != nil {
 		fmt.Printf("handshake failed: %v\n", err)
 	}
 	fmt.Printf("handshake with master completed. Port: %d\n", listeningPort)
-	listenCommands(reader, conn, context)
+	listenCommands(conn.Reader(), conn, context)
 }
