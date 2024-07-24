@@ -1,6 +1,7 @@
 package replication
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"math/rand"
@@ -18,15 +19,24 @@ type Role interface {
 }
 
 type MasterRole struct {
-	Id       string
-	Offset   uint64
-	mutex    sync.Mutex
-	replicas []net.Conn
+	Id               string
+	Offset           uint64
+	mutex            sync.Mutex
+	replicas         []replicaConnection
+	hasPendingWrites bool
+}
+
+type replicaConnection struct {
+	conn net.Conn
+	ack  chan uint64
 }
 
 func (m *MasterRole) AddReplica(conn net.Conn) {
 	m.mutex.Lock()
-	m.replicas = append(m.replicas, conn)
+	m.replicas = append(m.replicas, replicaConnection{
+		conn: conn,
+		ack:  make(chan uint64),
+	})
 	m.mutex.Unlock()
 }
 
@@ -36,9 +46,75 @@ func (m *MasterRole) Propagate(request resp.RespDataType) {
 	if len(m.replicas) == 0 {
 		return
 	}
+	m.hasPendingWrites = true
 	bytes := request.Bytes()
-	for _, conn := range m.replicas {
-		go conn.Write(bytes)
+	for _, c := range m.replicas {
+		go c.conn.Write(bytes)
+	}
+}
+
+func (r *MasterRole) Wait(numOfReplicas int, timeout time.Duration) int {
+	if len(r.replicas) == 0 {
+		return 0
+	}
+	if !r.hasPendingWrites {
+		return len(r.replicas)
+	}
+	r.hasPendingWrites = false
+	done := make(chan struct{})
+	ctx, cancel := context.WithCancel(context.Background())
+	numOfReceivedAcks := 0
+	if timeout > 0 {
+		go func() {
+			time.Sleep(timeout)
+			done <- struct{}{}
+		}()
+	}
+	go getAck(r.replicas, ctx, func() {
+		numOfReceivedAcks += 1
+		if numOfReceivedAcks == numOfReplicas || numOfReceivedAcks == len(r.replicas) {
+			done <- struct{}{}
+		}
+	})
+	<-done
+	cancel()
+	return numOfReceivedAcks
+}
+
+func (r *MasterRole) AckReceived(conn net.Conn, offset uint64) {
+	addr := conn.RemoteAddr().String()
+	for _, c := range r.replicas {
+		if c.conn.RemoteAddr().String() == addr {
+			c.ack <- offset
+		}
+	}
+}
+
+func getAck(replicas []replicaConnection, ctx context.Context, inc func()) {
+	c := make(chan struct{})
+	for _, replica := range replicas {
+		go func() {
+			ack := resp.Array{
+				Content: []resp.RespDataType{
+					resp.BulkString("REPLCONF"),
+					resp.BulkString("GETACK"),
+					resp.BulkString("*"),
+				},
+			}
+			_, err := replica.conn.Write(ack.Bytes())
+			if err != nil {
+				return
+			}
+			select {
+			case <-replica.ack:
+				c <- struct{}{}
+			case <-ctx.Done():
+				break
+			}
+		}()
+	}
+	for range c {
+		inc()
 	}
 }
 
@@ -178,7 +254,6 @@ func (c *SlaveConnection) Write(_ []byte) (int, error) {
 }
 
 func (c *SlaveConnection) Ack() error {
-	fmt.Printf("Ack: %d\n", c.slave.Offset)
 	response := resp.Array{
 		Content: []resp.RespDataType{
 			resp.BulkString("REPLCONF"),
@@ -194,13 +269,6 @@ func (r *MasterRole) CollectInfo(info map[string]string) {
 	info["role"] = "master"
 	info["master_replid"] = r.Id
 	info["master_repl_offset"] = strconv.FormatUint(r.Offset, 10)
-}
-
-func (r *MasterRole) Wait(numOfReplicas int, timeout time.Duration) int {
-	if numOfReplicas <= 0 {
-		return 0
-	}
-	return len(r.replicas)
 }
 
 func (r SlaveRole) CollectInfo(info map[string]string) {

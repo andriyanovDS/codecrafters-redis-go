@@ -153,6 +153,15 @@ func replconf(args []resp.RespDataType, _ resp.RespDataType, writer io.Writer, c
 	if command == "getack" {
 		conn := writer.(*replication.SlaveConnection)
 		return conn.Ack()
+	} else if command == "ack" && len(args) == 2 {
+		offset, err := strconv.ParseUint(string(args[1].(BulkString)), 10, 64)
+		if err != nil {
+			return err
+		}
+		conn := writer.(net.Conn)
+		master := context.ReplicationRole.(*replication.MasterRole)
+		master.AckReceived(conn, offset)
+		return nil
 	} else {
 		_, err := writer.Write(SimpleString("OK").Bytes())
 		return err
