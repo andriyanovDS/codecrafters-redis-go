@@ -159,9 +159,8 @@ func replconf(args []resp.RespDataType, _ resp.RespDataType, writer io.Writer, c
 		if err != nil {
 			return err
 		}
-		conn := writer.(net.Conn)
 		master := context.ReplicationRole.(*replication.MasterRole)
-		master.AckReceived(conn, offset)
+		master.AckReceived(offset)
 		return nil
 	} else {
 		_, err := writer.Write(SimpleString("OK").Bytes())
