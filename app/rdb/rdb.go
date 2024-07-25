@@ -8,6 +8,9 @@ import (
 	"hash/crc64"
 	"io"
 	"strconv"
+	"time"
+
+	"github.com/codecrafters-io/redis-starter-go/app/resp"
 )
 
 const (
@@ -17,6 +20,22 @@ const (
 	twoByteIntMask      = 0b01000000
 	fourByteIntMask     = 0b10000000
 	specialFormatMask   = 0b11000000
+	int8Mask            = 0b11000000
+	int16Mask           = 0b11000001
+	int32Mask           = 0b11000010
+)
+
+const (
+	unixTimestampSecByte = 0xfd
+	unixTimestampMsByte  = 0xfc
+	auxSectionByte       = 0xfa
+	dbSectionByte        = 0xfe
+	resizedbByte         = 0xfb
+	eofByte              = 0xff
+)
+
+const (
+	stringValueTypeByte = 0x0
 )
 
 func Empty() ([]byte, error) {
@@ -115,30 +134,228 @@ func appendChecksum(buf *bytes.Buffer) ([]byte, error) {
 	return bytes, nil
 }
 
-func DecodeLen(reader *bufio.Reader) (int32, error) {
+type ReadStrategy interface {
+	AddDbEntry(DbEntry)
+	AddAux(key string, value resp.RespDataType)
+}
+
+type DbEntry struct {
+	Key      resp.BulkString
+	Value    resp.RespDataType
+	ExpireAt time.Time
+}
+
+func Read(reader *bufio.Reader, strategy ReadStrategy) error {
+	var header [9]byte
+	_, err := io.ReadFull(reader, header[:])
+	if err != nil {
+		return err
+	}
+	fmt.Printf("reading RDB file version: %s\n", string(header[5:]))
+	err = decodeMetadata(reader, strategy)
+	if err != nil {
+		return err
+	}
+	for {
+		err = decodeDBSection(reader, strategy)
+		if err == io.EOF {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+	}
+}
+
+func decodeMetadata(reader *bufio.Reader, strategy ReadStrategy) error {
+	for {
+		firstByte, err := reader.ReadByte()
+		if err != nil {
+			return err
+		}
+		if firstByte != auxSectionByte {
+			reader.UnreadByte()
+			fmt.Printf("Metadata section ended\n")
+			return nil
+		}
+		fmt.Printf("Reading metadata\n")
+		key, err := decodeString(reader)
+		if err != nil {
+			return err
+		}
+		value, err := decodeString(reader)
+		if err != nil {
+			return err
+		}
+		fmt.Printf("AUX key: %v, value: %v\n", key, value)
+		strategy.AddAux(string(key.(resp.BulkString)), value)
+	}
+}
+
+func decodeDBSection(reader *bufio.Reader, strategy ReadStrategy) error {
+	sectionByte, err := reader.ReadByte()
+	if err != nil {
+		return err
+	}
+	if sectionByte != dbSectionByte {
+		return fmt.Errorf("expect db section byte %x, got: %x", dbSectionByte, sectionByte)
+	}
+	index, err := reader.ReadByte()
+	if err != nil {
+		return err
+	}
+	fmt.Printf("Decodig db at index %d\n", index)
+	field, err := reader.ReadByte()
+	if err != nil {
+		return err
+	}
+	if field != resizedbByte {
+		return fmt.Errorf("resizedb field expected")
+	}
+	keyValueTableSize, err := decodeLenEncoded(reader)
+	if err != nil {
+		return err
+	}
+	expireTableSize, err := decodeLenEncoded(reader)
+	if err != nil {
+		return err
+	}
+	fmt.Printf("Key-value table size: %v, expire table size %v\n", keyValueTableSize, expireTableSize)
+
+	var expireAt time.Time
+	for {
+		firstByte, err := reader.ReadByte()
+		if err != nil {
+			return err
+		}
+		switch firstByte {
+		case unixTimestampSecByte:
+			var bytes [4]byte
+			_, err := io.ReadFull(reader, bytes[:])
+			if err != nil {
+				return err
+			}
+			seconds := binary.LittleEndian.Uint32(bytes[:])
+			expireAt = time.Unix(int64(seconds), 0)
+		case unixTimestampMsByte:
+			var bytes [8]byte
+			_, err := io.ReadFull(reader, bytes[:])
+			if err != nil {
+				return err
+			}
+			ms := binary.LittleEndian.Uint64(bytes[:])
+			expireAt = time.UnixMilli(int64(ms))
+		case stringValueTypeByte:
+			key, err := decodeString(reader)
+			if err != nil {
+				return err
+			}
+			value, err := decodeString(reader)
+			if err != nil {
+				return err
+			}
+			fmt.Printf("DB entity key: %v, value: %v, expires: %v\n", key, value, expireAt)
+			strategy.AddDbEntry(DbEntry{
+				Key:      key.(resp.BulkString),
+				Value:    value,
+				ExpireAt: expireAt,
+			})
+		case dbSectionByte:
+			reader.UnreadByte()
+			return nil
+		case eofByte:
+			return io.EOF
+		default:
+			return fmt.Errorf("unsupported value type: %d", firstByte)
+		}
+	}
+}
+
+func decodeString(reader *bufio.Reader) (resp.RespDataType, error) {
+	length, err := decodeLenEncoded(reader)
+	_, ok := err.(specialFormatEncoding)
+	if ok {
+		return decodeSpecialFormat(reader)
+	} else if err != nil {
+		return nil, err
+	} else {
+		bytes := make([]byte, length.(resp.Integer))
+		_, err = io.ReadFull(reader, bytes)
+		if err != nil {
+			return nil, err
+		}
+		return resp.BulkString(string(bytes)), nil
+	}
+}
+
+func decodeLenEncoded(reader *bufio.Reader) (resp.RespDataType, error) {
 	firstByte, err := reader.ReadByte()
 	if err != nil {
-		return 0, err
+		return nil, err
 	}
 	switch firstByte & firstByteSuffixMask {
 	case singleByteIntMask:
-		return 0b111111 & int32(firstByte), nil
+		return resp.Integer(0xff & int32(firstByte)), nil
 	case twoByteIntMask:
 		secondByte, err := reader.ReadByte()
 		if err != nil {
-			return 0, err
+			return nil, err
 		}
-		return int32(secondByte) + ((int32(firstByte) & firstBytePrefixMask) << 8), nil
+		i := int32(secondByte) + ((int32(firstByte) & firstBytePrefixMask) << 8)
+		return resp.Integer(i), nil
 	case fourByteIntMask:
 		var lengthBytes [4]byte
 		_, err := io.ReadFull(reader, lengthBytes[:])
 		if err != nil {
-			return 0, nil
+			return nil, nil
 		}
-		return int32(binary.BigEndian.Uint32(lengthBytes[:])), nil
+		return resp.Integer(int32(binary.BigEndian.Uint32(lengthBytes[:]))), nil
 	case specialFormatMask:
-		return 0, fmt.Errorf("special format not supported yet")
+		err := reader.UnreadByte()
+		if err != nil {
+			return nil, err
+		}
+		return nil, specialFormatEncoding{firstByte: firstByte}
 	default:
-		return 0, fmt.Errorf("unknown first byte suffix: %v", strconv.FormatInt(int64(firstByte), 2))
+		return nil, fmt.Errorf("unknown length encoding prefix: %v", strconv.FormatInt(int64(firstByte), 2))
 	}
+}
+
+func decodeSpecialFormat(reader *bufio.Reader) (resp.RespDataType, error) {
+	firstByte, err := reader.ReadByte()
+	if err != nil {
+		return nil, err
+	}
+	switch firstByte {
+	case int8Mask:
+		next, err := reader.ReadByte()
+		if err != nil {
+			return nil, err
+		}
+		return resp.Integer(int32(next)), nil
+	case int16Mask:
+		var bytes [2]byte
+		_, err := io.ReadFull(reader, bytes[:])
+		if err != nil {
+			return nil, err
+		}
+		return resp.Integer(int32(binary.BigEndian.Uint16(bytes[:]))), nil
+	case int32Mask:
+		var bytes [4]byte
+		_, err := io.ReadFull(reader, bytes[:])
+		if err != nil {
+			return nil, err
+		}
+		return resp.Integer(int32(binary.BigEndian.Uint32(bytes[:]))), nil
+	default:
+		return nil, fmt.Errorf("unsupported string encoding: %d", firstByte)
+	}
+}
+
+type specialFormatEncoding struct {
+	firstByte byte
+}
+
+func (s specialFormatEncoding) Error() string {
+	return fmt.Sprintf("special format encoding %b", s.firstByte)
 }

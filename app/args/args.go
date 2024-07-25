@@ -12,8 +12,8 @@ import (
 type Args struct {
 	Port        uint16
 	ReplicaOf   replication.ReplicaAddress
-	rdbDir      string
-	rdbFileName string
+	RdbDir      string
+	RdbFileName string
 	Raw         map[string]string
 }
 
@@ -86,7 +86,7 @@ func rdbDir(rest []string, args *Args) ([]string, string) {
 	if len(rest) == 0 {
 		return rest, ""
 	}
-	args.rdbDir = rest[0]
+	args.RdbDir = rest[0]
 	return rest[1:], rest[0]
 }
 
@@ -94,6 +94,6 @@ func rdbFileName(rest []string, args *Args) ([]string, string) {
 	if len(rest) == 0 {
 		return rest, ""
 	}
-	args.rdbFileName = rest[0]
+	args.RdbFileName = rest[0]
 	return rest[1:], rest[0]
 }

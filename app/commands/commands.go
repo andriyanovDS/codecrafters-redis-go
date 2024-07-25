@@ -1,9 +1,12 @@
 package commands
 
 import (
+	"bufio"
 	"fmt"
 	"io"
 	"net"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -42,6 +45,7 @@ var Commands = map[string]Command{
 	"info":     info,
 	"wait":     wait,
 	"config":   config,
+	"keys":     keys,
 }
 
 func NewContext(args args.Args) Context {
@@ -229,6 +233,31 @@ func config(args []resp.RespDataType, _ resp.RespDataType, writer io.Writer, con
 	return err
 }
 
+func keys(args []resp.RespDataType, _ resp.RespDataType, writer io.Writer, context *Context) error {
+	if len(args) == 0 {
+		return fmt.Errorf("pattern mus be specified")
+	}
+	if args[0].(BulkString) != "*" {
+		return fmt.Errorf("only * wildcard supported for now")
+	}
+	fullPath := filepath.Join(context.args.RdbDir, context.args.RdbFileName)
+	file, err := os.Open(fullPath)
+	if err != nil {
+		fmt.Println("Error opening file:", err)
+		return err
+	}
+	defer file.Close()
+	reader := bufio.NewReader(file)
+	strategy := &accumulateKeysReadStrategy{}
+	err = rdb.Read(reader, strategy)
+	if err != nil {
+		fmt.Println("Error reading file:", err)
+		return err
+	}
+	_, err = writer.Write(resp.Array{Content: strategy.buf}.Bytes())
+	return err
+}
+
 func replicationInfo(context *Context) BulkString {
 	var builder strings.Builder
 	builder.WriteString("# Replication\r\n")
@@ -244,3 +273,13 @@ func replicationInfo(context *Context) BulkString {
 	}
 	return resp.BulkString(builder.String())
 }
+
+type accumulateKeysReadStrategy struct {
+	buf []resp.RespDataType
+}
+
+func (s *accumulateKeysReadStrategy) AddDbEntry(entry rdb.DbEntry) {
+	s.buf = append(s.buf, entry.Key)
+}
+
+func (*accumulateKeysReadStrategy) AddAux(_ string, _ resp.RespDataType) {}
