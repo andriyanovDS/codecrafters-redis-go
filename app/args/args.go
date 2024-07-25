@@ -10,18 +10,24 @@ import (
 )
 
 type Args struct {
-	Port      uint16
-	ReplicaOf replication.ReplicaAddress
+	Port        uint16
+	ReplicaOf   replication.ReplicaAddress
+	rdbDir      string
+	rdbFileName string
+	Raw         map[string]string
 }
 
 var parsers = map[string]flagParser{
-	"port":      port,
-	"replicaof": replicaof,
+	"port":       port,
+	"replicaof":  replicaof,
+	"dir":        rdbDir,
+	"dbfilename": rdbFileName,
 }
 
 func ParseArgs() Args {
 	osArgs := os.Args[1:]
 	var args Args
+	args.Raw = make(map[string]string)
 	for {
 		if len(osArgs) == 0 {
 			break
@@ -29,7 +35,9 @@ func ParseArgs() Args {
 		flag, _ := strings.CutPrefix(osArgs[0], "--")
 		parser := parsers[flag]
 		if parser != nil {
-			osArgs = parser(osArgs[1:], &args)
+			rest, value := parser(osArgs[1:], &args)
+			osArgs = rest
+			args.Raw[flag] = value
 		}
 	}
 	if args.Port == 0 {
@@ -38,11 +46,11 @@ func ParseArgs() Args {
 	return args
 }
 
-type flagParser func(rest []string, args *Args) []string
+type flagParser func(rest []string, args *Args) ([]string, string)
 
-func port(rest []string, args *Args) []string {
+func port(rest []string, args *Args) ([]string, string) {
 	if len(rest) == 0 {
-		return rest
+		return rest, ""
 	}
 	num, err := strconv.ParseUint(rest[0], 10, 16)
 	if err != nil {
@@ -50,12 +58,12 @@ func port(rest []string, args *Args) []string {
 	} else {
 		args.Port = uint16(num)
 	}
-	return rest[1:]
+	return rest[1:], rest[0]
 }
 
-func replicaof(rest []string, args *Args) []string {
+func replicaof(rest []string, args *Args) ([]string, string) {
 	if len(rest) == 0 {
-		return rest
+		return rest, ""
 	}
 	parts := strings.Split(rest[0], " ")
 	if len(parts) == 2 {
@@ -71,5 +79,21 @@ func replicaof(rest []string, args *Args) []string {
 	} else {
 		fmt.Printf("Invalid replica address %v\n", rest[0])
 	}
-	return rest[1:]
+	return rest[1:], rest[0]
+}
+
+func rdbDir(rest []string, args *Args) ([]string, string) {
+	if len(rest) == 0 {
+		return rest, ""
+	}
+	args.rdbDir = rest[0]
+	return rest[1:], rest[0]
+}
+
+func rdbFileName(rest []string, args *Args) ([]string, string) {
+	if len(rest) == 0 {
+		return rest, ""
+	}
+	args.rdbFileName = rest[0]
+	return rest[1:], rest[0]
 }

@@ -41,6 +41,7 @@ var Commands = map[string]Command{
 	"psync":    psync,
 	"info":     info,
 	"wait":     wait,
+	"config":   config,
 }
 
 func NewContext(args args.Args) Context {
@@ -207,6 +208,25 @@ func wait(args []resp.RespDataType, _ resp.RespDataType, writer io.Writer, conte
 	master := context.ReplicationRole.(*replication.MasterRole)
 	numOfReplicas = master.Wait(numOfReplicas, time.Duration(timeout)*time.Millisecond)
 	_, err = writer.Write(resp.Integer(numOfReplicas).Bytes())
+	return err
+}
+
+func config(args []resp.RespDataType, _ resp.RespDataType, writer io.Writer, context *Context) error {
+	if len(args) < 2 {
+		return fmt.Errorf("parameters must be specified")
+	}
+	if args[0].(BulkString) != "get" {
+		return nil
+	}
+	response := make([]resp.RespDataType, 0, len(args[1:])*2)
+	for _, parameter := range args[1:] {
+		key := parameter.(BulkString)
+		value, ok := context.args.Raw[string(key)]
+		if ok {
+			response = append(response, key, BulkString(value))
+		}
+	}
+	_, err := writer.Write(resp.Array{Content: response}.Bytes())
 	return err
 }
 
