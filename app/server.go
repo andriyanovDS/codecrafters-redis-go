@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"fmt"
 	"io"
 	"net"
@@ -9,6 +10,7 @@ import (
 
 	"github.com/codecrafters-io/redis-starter-go/app/args"
 	"github.com/codecrafters-io/redis-starter-go/app/commands"
+	"github.com/codecrafters-io/redis-starter-go/app/rdb"
 	"github.com/codecrafters-io/redis-starter-go/app/replication"
 	"github.com/codecrafters-io/redis-starter-go/app/resp"
 )
@@ -26,6 +28,11 @@ func main() {
 	fmt.Printf("Listening on port %v\n", args.Port)
 
 	context := commands.NewContext(args)
+	err = syncWithRDB(&context)
+	if err != nil {
+		fmt.Println("failed to sync with rdb:", err)
+	}
+
 	slaveRole, ok := context.ReplicationRole.(replication.SlaveRole)
 	if ok {
 		go syncWithMaster(&slaveRole, args.Port, &context)
@@ -88,3 +95,32 @@ func syncWithMaster(slave *replication.SlaveRole, listeningPort uint16, context 
 	fmt.Printf("handshake with master completed. Port: %d\n", listeningPort)
 	listenCommands(conn.Reader(), conn, context)
 }
+
+func syncWithRDB(context *commands.Context) error {
+	file, err := os.Open(context.RdbFilePath())
+	if err != nil {
+		fmt.Println("Error opening file:", err)
+		return err
+	}
+	defer file.Close()
+	reader := bufio.NewReader(file)
+	strategy := &rdbReadStrategy{
+		context: context,
+	}
+	err = rdb.Read(reader, strategy)
+	if err != nil {
+		fmt.Println("Error reading file:", err)
+		return err
+	}
+	return nil
+}
+
+type rdbReadStrategy struct {
+	context *commands.Context
+}
+
+func (s *rdbReadStrategy) AddDbEntry(entry rdb.DbEntry) {
+	s.context.AddEntity(entry)
+}
+
+func (*rdbReadStrategy) AddAux(_ string, _ resp.RespDataType) {}

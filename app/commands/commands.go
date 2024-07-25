@@ -1,11 +1,9 @@
 package commands
 
 import (
-	"bufio"
 	"fmt"
 	"io"
 	"net"
-	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -28,6 +26,17 @@ type Context struct {
 	storage         map[string]entity
 	ReplicationRole replication.Role
 	mutex           sync.Mutex
+}
+
+func (c *Context) RdbFilePath() string {
+	return filepath.Join(c.args.RdbDir, c.args.RdbFileName)
+}
+
+func (c *Context) AddEntity(e rdb.DbEntry) {
+	c.storage[string(e.Key)] = entity{
+		value:    string(e.Value.(BulkString)),
+		expireAt: e.ExpireAt,
+	}
 }
 
 type entity struct {
@@ -240,21 +249,13 @@ func keys(args []resp.RespDataType, _ resp.RespDataType, writer io.Writer, conte
 	if args[0].(BulkString) != "*" {
 		return fmt.Errorf("only * wildcard supported for now")
 	}
-	fullPath := filepath.Join(context.args.RdbDir, context.args.RdbFileName)
-	file, err := os.Open(fullPath)
-	if err != nil {
-		fmt.Println("Error opening file:", err)
-		return err
+	context.mutex.Lock()
+	keys := make([]resp.RespDataType, 0)
+	for key := range context.storage {
+		keys = append(keys, resp.BulkString(key))
 	}
-	defer file.Close()
-	reader := bufio.NewReader(file)
-	strategy := &accumulateKeysReadStrategy{}
-	err = rdb.Read(reader, strategy)
-	if err != nil {
-		fmt.Println("Error reading file:", err)
-		return err
-	}
-	_, err = writer.Write(resp.Array{Content: strategy.buf}.Bytes())
+	context.mutex.Unlock()
+	_, err := writer.Write(resp.Array{Content: keys}.Bytes())
 	return err
 }
 
@@ -273,13 +274,3 @@ func replicationInfo(context *Context) BulkString {
 	}
 	return resp.BulkString(builder.String())
 }
-
-type accumulateKeysReadStrategy struct {
-	buf []resp.RespDataType
-}
-
-func (s *accumulateKeysReadStrategy) AddDbEntry(entry rdb.DbEntry) {
-	s.buf = append(s.buf, entry.Key)
-}
-
-func (*accumulateKeysReadStrategy) AddAux(_ string, _ resp.RespDataType) {}
