@@ -37,6 +37,7 @@ type BulkString string
 type SimpleString string
 type Integer int64
 type NullBulkString struct{}
+type Error string
 
 type BufReader struct {
 	reader    *bufio.Reader
@@ -247,6 +248,14 @@ func (i Integer) Bytes() []byte {
 	return bytes.Bytes()
 }
 
+func (e Error) Bytes() []byte {
+	var bytes bytes.Buffer
+	bytes.WriteByte(ErrorByte)
+	bytes.Write([]byte(e))
+	writeTerminator(&bytes)
+	return bytes.Bytes()
+}
+
 func writeTerminator(w io.ByteWriter) {
 	w.WriteByte('\r')
 	w.WriteByte('\n')
@@ -258,6 +267,8 @@ func String(r RespDataType) string {
 		return string(t)
 	case SimpleString:
 		return string(t)
+	case Integer:
+		return strconv.Itoa(int(t))
 	default:
 		return ""
 	}

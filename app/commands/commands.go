@@ -28,20 +28,20 @@ type Context struct {
 	mutex           sync.Mutex
 }
 
+type entity struct {
+	value    string
+	expireAt time.Time
+}
+
 func (c *Context) RdbFilePath() string {
 	return filepath.Join(c.args.RdbDir, c.args.RdbFileName)
 }
 
 func (c *Context) AddEntity(e rdb.DbEntry) {
 	c.storage[string(e.Key)] = entity{
-		value:    string(e.Value.(BulkString)),
+		value:    resp.String(e.Value),
 		expireAt: e.ExpireAt,
 	}
-}
-
-type entity struct {
-	value    string
-	expireAt time.Time
 }
 
 var Commands = map[string]Command{
@@ -55,6 +55,7 @@ var Commands = map[string]Command{
 	"wait":     wait,
 	"config":   config,
 	"keys":     keys,
+	"incr":     incr,
 }
 
 func NewContext(args args.Args) Context {
@@ -147,15 +148,46 @@ func get(args []resp.RespDataType, _ resp.RespDataType, writer io.Writer, contex
 	entity, ok := context.storage[key]
 	context.mutex.Unlock()
 
-	var resp resp.RespDataType
+	var response resp.RespDataType
 	if !ok {
-		resp = NullBulkString{}
+		response = NullBulkString{}
 	} else if !entity.expireAt.IsZero() && entity.expireAt.Before(time.Now()) {
-		resp = NullBulkString{}
+		response = NullBulkString{}
 	} else {
-		resp = BulkString(entity.value)
+		response = resp.BulkString(entity.value)
 	}
-	_, err := writer.Write(resp.Bytes())
+	_, err := writer.Write(response.Bytes())
+	return err
+}
+
+func incr(args []resp.RespDataType, _ resp.RespDataType, writer io.Writer, context *Context) error {
+	if len(args) != 1 {
+		return fmt.Errorf("INCR command has 1 argument")
+	}
+	key := resp.String(args[0])
+
+	var value int
+	context.mutex.Lock()
+	e, ok := context.storage[key]
+	if !ok || (!e.expireAt.IsZero() && e.expireAt.Before(time.Now())) {
+		e.expireAt = time.Time{}
+		value = 1
+	} else {
+		intVal, err := strconv.Atoi(e.value)
+		if err != nil {
+			errResp := resp.Error("ERR value is not an integer or out of range")
+			_, err := writer.Write(errResp.Bytes())
+			return err
+		}
+		value = intVal + 1
+	}
+	context.storage[key] = entity{
+		value:    strconv.Itoa(value),
+		expireAt: e.expireAt,
+	}
+	context.mutex.Unlock()
+
+	_, err := writer.Write(resp.Integer(value).Bytes())
 	return err
 }
 
