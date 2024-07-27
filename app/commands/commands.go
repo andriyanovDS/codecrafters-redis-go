@@ -127,6 +127,13 @@ func Handle(req resp.RespDataType, writer io.Writer, context *Context) {
 			delete(context.queue, queueKey)
 			_ = exec(queue, w, context)
 		}
+	} else if command == "discard" {
+		if transactionStarted {
+			delete(context.queue, queueKey)
+			_ = w.Write(resp.SimpleString("OK"))
+		} else {
+			_ = w.Write(resp.Error("ERR DISCARD without MULTI"))
+		}
 	} else if transactionStarted {
 		context.queue[queueKey] = append(queue, req)
 		_ = w.Write(resp.SimpleString("QUEUED"))
