@@ -6,7 +6,6 @@ import (
 	"io"
 	"net"
 	"os"
-	"strings"
 
 	"github.com/codecrafters-io/redis-starter-go/app/args"
 	"github.com/codecrafters-io/redis-starter-go/app/commands"
@@ -14,9 +13,6 @@ import (
 	"github.com/codecrafters-io/redis-starter-go/app/replication"
 	"github.com/codecrafters-io/redis-starter-go/app/resp"
 )
-
-type Array = resp.Array
-type BulkString = resp.BulkString
 
 func main() {
 	args := args.ParseArgs()
@@ -59,25 +55,7 @@ func listenCommands(reader *resp.BufReader, writer io.Writer, context *commands.
 			fmt.Printf("RESP parsing failed: %s\n", err)
 			return
 		}
-		request, ok := resp.(Array)
-		if !ok {
-			fmt.Printf("ignored command: %v\n", resp)
-			continue
-		}
-		if len(request.Content) == 0 {
-			continue
-		}
-		command := string(request.Content[0].(BulkString))
-		handler, ok := commands.Commands[strings.ToLower(command)]
-		if !ok {
-			fmt.Printf("unknown command received: %v\n", command)
-			continue
-		}
-		err = handler(request.Content[1:], resp, writer, context)
-		if err != nil {
-			fmt.Printf("%s command handling failure: %v\n", command, err)
-			continue
-		}
+		commands.Handle(resp, writer, context)
 	}
 }
 

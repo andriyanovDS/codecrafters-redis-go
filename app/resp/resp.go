@@ -35,6 +35,7 @@ func (a Array) Command() string {
 
 type BulkString string
 type SimpleString string
+type RdbString string
 type Integer int64
 type NullBulkString struct{}
 type Error string
@@ -218,6 +219,15 @@ func (s BulkString) Bytes() []byte {
 	writeTerminator(&bytes)
 	bytes.Write([]byte(s))
 	writeTerminator(&bytes)
+	return bytes.Bytes()
+}
+
+func (s RdbString) Bytes() []byte {
+	var bytes bytes.Buffer
+	bytes.WriteByte(BulkStringByte)
+	bytes.Write([]byte(strconv.Itoa(len(s))))
+	writeTerminator(&bytes)
+	bytes.Write([]byte(s))
 	return bytes.Bytes()
 }
 

@@ -16,14 +16,37 @@ import (
 	"github.com/codecrafters-io/redis-starter-go/app/resp"
 )
 
-type Command func([]resp.RespDataType, resp.RespDataType, io.Writer, *Context) error
+type command func([]resp.RespDataType, resp.RespDataType, writer, *Context) error
 type BulkString = resp.BulkString
 type SimpleString = resp.SimpleString
 type NullBulkString = resp.NullBulkString
 
+type writer interface {
+	Write(resp.RespDataType) error
+}
+
+type connectionWriter struct {
+	conn io.Writer
+}
+
+func (c connectionWriter) Write(r resp.RespDataType) error {
+	_, err := c.conn.Write(r.Bytes())
+	return err
+}
+
+type execWriter struct {
+	buf []resp.RespDataType
+}
+
+func (c *execWriter) Write(r resp.RespDataType) error {
+	c.buf = append(c.buf, r)
+	return nil
+}
+
 type Context struct {
 	args            args.Args
 	storage         map[string]entity
+	queue           map[string][]resp.RespDataType
 	ReplicationRole replication.Role
 	mutex           sync.Mutex
 }
@@ -44,7 +67,7 @@ func (c *Context) AddEntity(e rdb.DbEntry) {
 	}
 }
 
-var Commands = map[string]Command{
+var commands = map[string]command{
 	"ping":     ping,
 	"echo":     echo,
 	"set":      set,
@@ -71,11 +94,69 @@ func NewContext(args args.Args) Context {
 				return replication.NewMaster()
 			}
 		}(),
+		queue: make(map[string][]resp.RespDataType),
 		mutex: sync.Mutex{},
 	}
 }
 
-func ping(args []resp.RespDataType, _ resp.RespDataType, writer io.Writer, _ *Context) error {
+func Handle(req resp.RespDataType, writer io.Writer, context *Context) {
+	w := connectionWriter{conn: writer}
+	conn, ok := writer.(net.Conn)
+	if !ok {
+		handle(req, w, context)
+		return
+	}
+	queueKey := conn.RemoteAddr().String()
+	queue, transactionStarted := context.queue[queueKey]
+	request, ok := req.(resp.Array)
+	if !ok {
+		fmt.Printf("ignored command: %v\n", req)
+		return
+	}
+	if len(request.Content) == 0 {
+		return
+	}
+	command := string(request.Content[0].(BulkString))
+	if command == "multi" {
+		context.queue[queueKey] = make([]resp.RespDataType, 0)
+		_ = w.Write(resp.SimpleString("OK"))
+	} else if command == "exec" {
+		if !transactionStarted {
+			_ = w.Write(resp.Error("ERR EXEC without MULTI"))
+		} else {
+			delete(context.queue, queueKey)
+			_ = exec(queue, w, context)
+		}
+	} else if transactionStarted {
+		context.queue[queueKey] = append(queue, req)
+		_ = w.Write(resp.SimpleString("QUEUED"))
+	} else {
+		handle(req, w, context)
+	}
+}
+
+func handle(req resp.RespDataType, writer writer, context *Context) {
+	request, ok := req.(resp.Array)
+	if !ok {
+		fmt.Printf("ignored command: %v\n", req)
+		return
+	}
+	if len(request.Content) == 0 {
+		return
+	}
+	command := string(request.Content[0].(BulkString))
+	handler, ok := commands[strings.ToLower(command)]
+	if !ok {
+		fmt.Printf("unknown command received: %v\n", command)
+		return
+	}
+	err := handler(request.Content[1:], req, writer, context)
+	if err != nil {
+		fmt.Printf("%s command handling failure: %v\n", command, err)
+	}
+}
+
+func ping(args []resp.RespDataType, _ resp.RespDataType, writer writer, _ *Context) error {
 	len := len(args)
 	var response resp.RespDataType
 	if len == 1 {
@@ -83,19 +164,17 @@ func ping(args []resp.RespDataType, _ resp.RespDataType, writer io.Writer, _ *Co
 	} else {
 		response = BulkString("PONG")
 	}
-	_, err := writer.Write(response.Bytes())
-	return err
+	return writer.Write(response)
 }
 
-func echo(args []resp.RespDataType, _ resp.RespDataType, writer io.Writer, _ *Context) error {
+func echo(args []resp.RespDataType, _ resp.RespDataType, writer writer, _ *Context) error {
 	if len(args) != 1 {
 		return fmt.Errorf("ECHO command has 1 argument")
 	}
-	_, err := writer.Write(args[0].Bytes())
-	return err
+	return writer.Write(args[0])
 }
 
-func set(args []resp.RespDataType, request resp.RespDataType, writer io.Writer, context *Context) error {
+func set(args []resp.RespDataType, request resp.RespDataType, writer writer, context *Context) error {
 	if len(args) < 2 {
 		return fmt.Errorf("SET command has at least 2 arguments")
 	}
@@ -133,12 +212,10 @@ func set(args []resp.RespDataType, request resp.RespDataType, writer io.Writer, 
 	if ok {
 		master.Propagate(request)
 	}
-
-	_, err := writer.Write(SimpleString("OK").Bytes())
-	return err
+	return writer.Write(SimpleString("OK"))
 }
 
-func get(args []resp.RespDataType, _ resp.RespDataType, writer io.Writer, context *Context) error {
+func get(args []resp.RespDataType, req resp.RespDataType, writer writer, context *Context) error {
 	if len(args) != 1 {
 		return fmt.Errorf("GET command has 1 argument")
 	}
@@ -156,11 +233,10 @@ func get(args []resp.RespDataType, _ resp.RespDataType, writer io.Writer, contex
 	} else {
 		response = resp.BulkString(entity.value)
 	}
-	_, err := writer.Write(response.Bytes())
-	return err
+	return writer.Write(response)
 }
 
-func incr(args []resp.RespDataType, _ resp.RespDataType, writer io.Writer, context *Context) error {
+func incr(args []resp.RespDataType, req resp.RespDataType, writer writer, context *Context) error {
 	if len(args) != 1 {
 		return fmt.Errorf("INCR command has 1 argument")
 	}
@@ -175,9 +251,7 @@ func incr(args []resp.RespDataType, _ resp.RespDataType, writer io.Writer, conte
 	} else {
 		intVal, err := strconv.Atoi(e.value)
 		if err != nil {
-			errResp := resp.Error("ERR value is not an integer or out of range")
-			_, err := writer.Write(errResp.Bytes())
-			return err
+			return writer.Write(resp.Error("ERR value is not an integer or out of range"))
 		}
 		value = intVal + 1
 	}
@@ -186,18 +260,16 @@ func incr(args []resp.RespDataType, _ resp.RespDataType, writer io.Writer, conte
 		expireAt: e.expireAt,
 	}
 	context.mutex.Unlock()
-
-	_, err := writer.Write(resp.Integer(value).Bytes())
-	return err
+	return writer.Write(resp.Integer(value))
 }
 
-func replconf(args []resp.RespDataType, _ resp.RespDataType, writer io.Writer, context *Context) error {
+func replconf(args []resp.RespDataType, _ resp.RespDataType, writer writer, context *Context) error {
 	if len(args) == 0 {
 		return fmt.Errorf("replconf must contain arguments")
 	}
 	command := args[0].(BulkString)
 	if command == "getack" {
-		conn := writer.(*replication.SlaveConnection)
+		conn := writer.(connectionWriter).conn.(*replication.SlaveConnection)
 		return conn.Ack()
 	} else if command == "ack" && len(args) == 2 {
 		offset, err := strconv.ParseUint(string(args[1].(BulkString)), 10, 64)
@@ -208,15 +280,14 @@ func replconf(args []resp.RespDataType, _ resp.RespDataType, writer io.Writer, c
 		master.AckReceived(offset)
 		return nil
 	} else {
-		_, err := writer.Write(SimpleString("OK").Bytes())
-		return err
+		return writer.Write(SimpleString("OK"))
 	}
 }
 
-func psync(_ []resp.RespDataType, _ resp.RespDataType, writer io.Writer, context *Context) error {
+func psync(_ []resp.RespDataType, _ resp.RespDataType, writer writer, context *Context) error {
 	master := context.ReplicationRole.(*replication.MasterRole)
 	response := fmt.Sprintf("FULLRESYNC %v %d", master.Id, master.Offset)
-	_, err := writer.Write(SimpleString(response).Bytes())
+	err := writer.Write(SimpleString(response))
 	if err != nil {
 		return err
 	}
@@ -224,20 +295,18 @@ func psync(_ []resp.RespDataType, _ resp.RespDataType, writer io.Writer, context
 	if err != nil {
 		return err
 	}
-	syncResp := BulkString(string(emptyRdp)).Bytes()
-	_, err = writer.Write(syncResp[:len(syncResp)-2])
+	err = writer.Write(resp.RdbString(string(emptyRdp)))
 	if err == nil {
-		master.AddReplica(writer.(net.Conn))
+		master.AddReplica(writer.(connectionWriter).conn.(net.Conn))
 	}
 	return err
 }
 
-func info(_ []resp.RespDataType, _ resp.RespDataType, writer io.Writer, context *Context) error {
-	_, err := writer.Write(replicationInfo(context).Bytes())
-	return err
+func info(_ []resp.RespDataType, _ resp.RespDataType, writer writer, context *Context) error {
+	return writer.Write(replicationInfo(context))
 }
 
-func wait(args []resp.RespDataType, _ resp.RespDataType, writer io.Writer, context *Context) error {
+func wait(args []resp.RespDataType, _ resp.RespDataType, writer writer, context *Context) error {
 	if len(args) != 2 {
 		return fmt.Errorf("numreplicas and timeout must be specified")
 	}
@@ -251,11 +320,10 @@ func wait(args []resp.RespDataType, _ resp.RespDataType, writer io.Writer, conte
 	}
 	master := context.ReplicationRole.(*replication.MasterRole)
 	numOfReplicas = master.Wait(numOfReplicas, time.Duration(timeout)*time.Millisecond)
-	_, err = writer.Write(resp.Integer(numOfReplicas).Bytes())
-	return err
+	return writer.Write(resp.Integer(numOfReplicas))
 }
 
-func config(args []resp.RespDataType, _ resp.RespDataType, writer io.Writer, context *Context) error {
+func config(args []resp.RespDataType, _ resp.RespDataType, writer writer, context *Context) error {
 	if len(args) < 2 {
 		return fmt.Errorf("parameters must be specified")
 	}
@@ -270,11 +338,10 @@ func config(args []resp.RespDataType, _ resp.RespDataType, writer io.Writer, con
 			response = append(response, key, BulkString(value))
 		}
 	}
-	_, err := writer.Write(resp.Array{Content: response}.Bytes())
-	return err
+	return writer.Write(resp.Array{Content: response})
 }
 
-func keys(args []resp.RespDataType, _ resp.RespDataType, writer io.Writer, context *Context) error {
+func keys(args []resp.RespDataType, _ resp.RespDataType, writer writer, context *Context) error {
 	if len(args) == 0 {
 		return fmt.Errorf("pattern mus be specified")
 	}
@@ -287,8 +354,17 @@ func keys(args []resp.RespDataType, _ resp.RespDataType, writer io.Writer, conte
 		keys = append(keys, resp.BulkString(key))
 	}
 	context.mutex.Unlock()
-	_, err := writer.Write(resp.Array{Content: keys}.Bytes())
-	return err
+	return writer.Write(resp.Array{Content: keys})
+}
+
+func exec(queue []resp.RespDataType, writer writer, context *Context) error {
+	w := execWriter{
+		buf: make([]resp.RespDataType, 0, len(context.queue)),
+	}
+	for _, comm := range queue {
+		handle(comm, &w, context)
+	}
+	return writer.Write(resp.Array{Content: w.buf})
 }
 
 func replicationInfo(context *Context) BulkString {
