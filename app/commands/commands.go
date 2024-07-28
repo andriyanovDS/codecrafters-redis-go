@@ -17,6 +17,7 @@ import (
 )
 
 type command func([]resp.RespDataType, resp.RespDataType, writer, *Context) error
+type transactionCommand func(started bool, key string, w writer, c *Context) error
 type BulkString = resp.BulkString
 type SimpleString = resp.SimpleString
 type NullBulkString = resp.NullBulkString
@@ -81,6 +82,12 @@ var commands = map[string]command{
 	"incr":     incr,
 }
 
+var transactionCommands = map[string]transactionCommand{
+	"multi":   multi,
+	"exec":    exec,
+	"discard": discard,
+}
+
 func NewContext(args args.Args) Context {
 	return Context{
 		args:    args,
@@ -117,23 +124,9 @@ func Handle(req resp.RespDataType, writer io.Writer, context *Context) {
 		return
 	}
 	command := string(request.Content[0].(BulkString))
-	if command == "multi" {
-		context.queue[queueKey] = make([]resp.RespDataType, 0)
-		_ = w.Write(resp.SimpleString("OK"))
-	} else if command == "exec" {
-		if !transactionStarted {
-			_ = w.Write(resp.Error("ERR EXEC without MULTI"))
-		} else {
-			delete(context.queue, queueKey)
-			_ = exec(queue, w, context)
-		}
-	} else if command == "discard" {
-		if transactionStarted {
-			delete(context.queue, queueKey)
-			_ = w.Write(resp.SimpleString("OK"))
-		} else {
-			_ = w.Write(resp.Error("ERR DISCARD without MULTI"))
-		}
+	handler, ok := transactionCommands[command]
+	if ok {
+		handler(transactionStarted, queueKey, w, context)
 	} else if transactionStarted {
 		context.queue[queueKey] = append(queue, req)
 		_ = w.Write(resp.SimpleString("QUEUED"))
@@ -152,6 +145,7 @@ func handle(req resp.RespDataType, writer writer, context *Context) {
 		return
 	}
 	command := string(request.Content[0].(BulkString))
+	fmt.Printf("Command executed %s\n", command)
 	handler, ok := commands[strings.ToLower(command)]
 	if !ok {
 		fmt.Printf("unknown command received: %v\n", command)
@@ -251,6 +245,7 @@ func incr(args []resp.RespDataType, req resp.RespDataType, writer writer, contex
 
 	var value int
 	context.mutex.Lock()
+	defer context.mutex.Unlock()
 	e, ok := context.storage[key]
 	if !ok || (!e.expireAt.IsZero() && e.expireAt.Before(time.Now())) {
 		e.expireAt = time.Time{}
@@ -266,7 +261,6 @@ func incr(args []resp.RespDataType, req resp.RespDataType, writer writer, contex
 		value:    strconv.Itoa(value),
 		expireAt: e.expireAt,
 	}
-	context.mutex.Unlock()
 	return writer.Write(resp.Integer(value))
 }
 
@@ -364,14 +358,33 @@ func keys(args []resp.RespDataType, _ resp.RespDataType, writer writer, context 
 	return writer.Write(resp.Array{Content: keys})
 }
 
-func exec(queue []resp.RespDataType, writer writer, context *Context) error {
-	w := execWriter{
-		buf: make([]resp.RespDataType, 0, len(context.queue)),
+func multi(_ bool, key string, w writer, c *Context) error {
+	c.queue[key] = make([]resp.RespDataType, 0)
+	return w.Write(resp.SimpleString("OK"))
+}
+
+func exec(started bool, key string, w writer, c *Context) error {
+	if !started {
+		return w.Write(resp.Error("ERR EXEC without MULTI"))
+	}
+	queue := c.queue[key]
+	delete(c.queue, key)
+	writer := execWriter{
+		buf: make([]resp.RespDataType, 0, len(c.queue)),
 	}
 	for _, comm := range queue {
-		handle(comm, &w, context)
+		handle(comm, &writer, c)
 	}
-	return writer.Write(resp.Array{Content: w.buf})
+	return w.Write(resp.Array{Content: writer.buf})
+}
+
+func discard(started bool, key string, w writer, c *Context) error {
+	if started {
+		delete(c.queue, key)
+		return w.Write(resp.SimpleString("OK"))
+	} else {
+		return w.Write(resp.Error("ERR DISCARD without MULTI"))
+	}
 }
 
 func replicationInfo(context *Context) BulkString {
