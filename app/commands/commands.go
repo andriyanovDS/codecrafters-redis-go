@@ -80,6 +80,7 @@ var commands = map[string]command{
 	"config":   config,
 	"keys":     keys,
 	"incr":     incr,
+	"type":     type_,
 }
 
 var transactionCommands = map[string]transactionCommand{
@@ -262,6 +263,27 @@ func incr(args []resp.RespDataType, req resp.RespDataType, writer writer, contex
 		expireAt: e.expireAt,
 	}
 	return writer.Write(resp.Integer(value))
+}
+
+func type_(args []resp.RespDataType, _ resp.RespDataType, writer writer, context *Context) error {
+	if len(args) != 1 {
+		return fmt.Errorf("GET command has 1 argument")
+	}
+	key := resp.String(args[0])
+
+	context.mutex.Lock()
+	entity, ok := context.storage[key]
+	context.mutex.Unlock()
+
+	var response resp.RespDataType
+	if !ok {
+		response = resp.SimpleString("none")
+	} else if !entity.expireAt.IsZero() && entity.expireAt.Before(time.Now()) {
+		response = resp.SimpleString("none")
+	} else {
+		response = resp.SimpleString("string")
+	}
+	return writer.Write(response)
 }
 
 func replconf(args []resp.RespDataType, _ resp.RespDataType, writer writer, context *Context) error {
