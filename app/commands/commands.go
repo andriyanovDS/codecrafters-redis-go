@@ -148,7 +148,6 @@ func handle(req resp.RespDataType, writer writer, context *Context) {
 		return
 	}
 	command := string(request.Content[0].(BulkString))
-	fmt.Printf("Command executed %s\n", command)
 	handler, ok := commands[strings.ToLower(command)]
 	if !ok {
 		fmt.Printf("unknown command received: %v\n", command)
@@ -312,10 +311,10 @@ func xadd(args []resp.RespDataType, _ resp.RespDataType, writer writer, context 
 		})
 	}
 	context.mutex.Lock()
-	_, ok := context.storage[key]
-	if ok {
-		return fmt.Errorf("append to stream not supported yet")
-	} else {
+	entry, ok := context.storage[key]
+	s, isStream := entry.value.(*stream.Stream)
+	var response resp.RespDataType
+	if !ok {
 		stream, err := stream.New(id, payload)
 		if err != nil {
 			return err
@@ -323,9 +322,19 @@ func xadd(args []resp.RespDataType, _ resp.RespDataType, writer writer, context 
 		context.storage[key] = entity{
 			value: stream,
 		}
+		response = resp.SimpleString(id)
+	} else if !isStream {
+		response = resp.Error("WRONGTYPE Operation against a key holding the wrong kind of value")
+	} else {
+		err := s.Insert(id, payload)
+		if err != nil {
+			response = resp.Error(err.Error())
+		} else {
+			response = resp.SimpleString(id)
+		}
 	}
 	context.mutex.Unlock()
-	return writer.Write(resp.SimpleString(id))
+	return writer.Write(response)
 }
 
 func replconf(args []resp.RespDataType, _ resp.RespDataType, writer writer, context *Context) error {
