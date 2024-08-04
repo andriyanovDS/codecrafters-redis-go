@@ -322,11 +322,11 @@ func xadd(args []resp.RespDataType, _ resp.RespDataType, writer writer, context 
 		context.storage[key] = entity{
 			value: stream,
 		}
-		response = resp.SimpleString(id)
+		response = resp.SimpleString(stream.LastID())
 	} else if !isStream {
 		response = resp.Error("WRONGTYPE Operation against a key holding the wrong kind of value")
 	} else {
-		err := s.Insert(id, payload)
+		id, err := s.Insert(id, payload)
 		if err != nil {
 			response = resp.Error(err.Error())
 		} else {
