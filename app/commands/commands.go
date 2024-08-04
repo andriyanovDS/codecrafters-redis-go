@@ -14,6 +14,7 @@ import (
 	"github.com/codecrafters-io/redis-starter-go/app/rdb"
 	"github.com/codecrafters-io/redis-starter-go/app/replication"
 	"github.com/codecrafters-io/redis-starter-go/app/resp"
+	"github.com/codecrafters-io/redis-starter-go/app/stream"
 )
 
 type command func([]resp.RespDataType, resp.RespDataType, writer, *Context) error
@@ -53,7 +54,7 @@ type Context struct {
 }
 
 type entity struct {
-	value    string
+	value    interface{}
 	expireAt time.Time
 }
 
@@ -81,6 +82,7 @@ var commands = map[string]command{
 	"keys":     keys,
 	"incr":     incr,
 	"type":     type_,
+	"xadd":     xadd,
 }
 
 var transactionCommands = map[string]transactionCommand{
@@ -233,7 +235,7 @@ func get(args []resp.RespDataType, req resp.RespDataType, writer writer, context
 	} else if !entity.expireAt.IsZero() && entity.expireAt.Before(time.Now()) {
 		response = NullBulkString{}
 	} else {
-		response = resp.BulkString(entity.value)
+		response = resp.BulkString(entity.value.(string))
 	}
 	return writer.Write(response)
 }
@@ -252,7 +254,7 @@ func incr(args []resp.RespDataType, req resp.RespDataType, writer writer, contex
 		e.expireAt = time.Time{}
 		value = 1
 	} else {
-		intVal, err := strconv.Atoi(e.value)
+		intVal, err := strconv.Atoi(e.value.(string))
 		if err != nil {
 			return writer.Write(resp.Error("ERR value is not an integer or out of range"))
 		}
@@ -281,9 +283,49 @@ func type_(args []resp.RespDataType, _ resp.RespDataType, writer writer, context
 	} else if !entity.expireAt.IsZero() && entity.expireAt.Before(time.Now()) {
 		response = resp.SimpleString("none")
 	} else {
-		response = resp.SimpleString("string")
+		switch entity.value.(type) {
+		case string:
+			response = resp.SimpleString("string")
+		case *stream.Stream:
+			response = resp.SimpleString("stream")
+		default:
+			return fmt.Errorf("unexpected entity type: %T", entity.value)
+		}
 	}
 	return writer.Write(response)
+}
+
+func xadd(args []resp.RespDataType, _ resp.RespDataType, writer writer, context *Context) error {
+	if len(args) < 2 {
+		return fmt.Errorf("XADD command must contain key and id")
+	}
+	key := resp.String(args[0].(BulkString))
+	id := resp.String(args[1].(BulkString))
+	var payload []stream.Pair
+	for i := 2; i < len(args); i += 2 {
+		if i+1 == len(args) {
+			return fmt.Errorf("value is missing")
+		}
+		payload = append(payload, stream.Pair{
+			Field: resp.String(args[i].(BulkString)),
+			Value: resp.String(args[i+1].(BulkString)),
+		})
+	}
+	context.mutex.Lock()
+	_, ok := context.storage[key]
+	if ok {
+		return fmt.Errorf("append to stream not supported yet")
+	} else {
+		stream, err := stream.New(id, payload)
+		if err != nil {
+			return err
+		}
+		context.storage[key] = entity{
+			value: stream,
+		}
+	}
+	context.mutex.Unlock()
+	return writer.Write(resp.SimpleString(id))
 }
 
 func replconf(args []resp.RespDataType, _ resp.RespDataType, writer writer, context *Context) error {
