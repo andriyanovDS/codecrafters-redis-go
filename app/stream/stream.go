@@ -73,8 +73,8 @@ func (s *Stream) LastID() string {
 
 func parseID(id string, lastID streamID) (streamID, error) {
 	parts := strings.Split(id, "-")
-	if len(parts) != 2 {
-		return streamID{}, fmt.Errorf("Stream ID must be in format <millisecondsTime>-<sequenceNumber>")
+	if len(parts) == 0 {
+		return streamID{}, fmt.Errorf("ERR Invalid stream ID specified as stream command argument")
 	}
 	if parts[0] == "*" {
 		ms := uint64(time.Now().UnixMilli())
