@@ -84,6 +84,7 @@ var commands = map[string]command{
 	"type":     type_,
 	"xadd":     xadd,
 	"xrange":   xrange,
+	"xread":    xread,
 }
 
 var transactionCommands = map[string]transactionCommand{
@@ -356,7 +357,6 @@ func xrange(args []resp.RespDataType, _ resp.RespDataType, writer writer, contex
 	} else {
 		content := make([]resp.RespDataType, 0)
 		for _, match := range s.Range(start, end) {
-			fmt.Printf("Found match: %v\n", match)
 			payload := make([]resp.RespDataType, 0, len(match.Pair)*2)
 			for _, pair := range match.Pair {
 				payload = append(payload, resp.BulkString(pair.Field), resp.BulkString(pair.Value))
@@ -369,6 +369,55 @@ func xrange(args []resp.RespDataType, _ resp.RespDataType, writer writer, contex
 		response = resp.Array{Content: content}
 	}
 	context.mutex.Unlock()
+	return writer.Write(response)
+}
+
+func xread(args []resp.RespDataType, _ resp.RespDataType, writer writer, context *Context) error {
+	if len(args) < 3 {
+		return fmt.Errorf("(error) ERR wrong number of arguments for 'xread' command")
+	}
+	streams := resp.String(args[0].(BulkString))
+	if streams != "streams" {
+		return fmt.Errorf("(error) ERR syntax error")
+	}
+	args = args[1:]
+	context.mutex.Lock()
+	defer context.mutex.Unlock()
+
+	var response resp.RespDataType
+	content := make([]resp.RespDataType, 0)
+
+	for len(args) >= 2 {
+		key := resp.String(args[0].(BulkString))
+		id := resp.String(args[1].(BulkString))
+		args = args[2:]
+
+		entry, ok := context.storage[key]
+		s, isStream := entry.value.(*stream.Stream)
+		if !ok {
+			continue
+		}
+		if !isStream {
+			response = resp.Error("WRONGTYPE Operation against a key holding the wrong kind of value")
+			return writer.Write(response)
+		}
+		matches := make([]resp.RespDataType, 0)
+		for _, match := range s.Read(id) {
+			payload := make([]resp.RespDataType, 0, len(match.Pair)*2)
+			for _, pair := range match.Pair {
+				payload = append(payload, resp.BulkString(pair.Field), resp.BulkString(pair.Value))
+			}
+			matches = append(content, resp.Array{Content: []resp.RespDataType{
+				resp.BulkString(match.Id),
+				resp.Array{Content: payload},
+			}})
+		}
+		content = append(content, resp.Array{Content: []resp.RespDataType{
+			resp.BulkString(key),
+			resp.Array{Content: matches},
+		}})
+	}
+	response = resp.Array{Content: content}
 	return writer.Write(response)
 }
 

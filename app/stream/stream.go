@@ -1,6 +1,7 @@
 package stream
 
 import (
+	"bytes"
 	"fmt"
 	"slices"
 	"strconv"
@@ -78,6 +79,19 @@ func (s *Stream) Insert(id string, payload []Pair) (string, error) {
 	return streamID.String(), nil
 }
 
+func (s *Stream) Read(id string) []RangeMatch {
+	matches := make([]RangeMatch, 0)
+	search := []byte(id)
+	node := s.root
+	for _, edge := range node.edges {
+		if bytes.Compare(edge.prefix, search) < 1 {
+			continue
+		}
+		edge.rangeMin(search, &matches)
+	}
+	return matches
+}
+
 func (s *Stream) Range(start string, end string) []RangeMatch {
 	matches := make([]RangeMatch, 0)
 	minId := []byte(start)
@@ -106,7 +120,6 @@ func (s *Stream) Range(start string, end string) []RangeMatch {
 			break
 		}
 	}
-	fmt.Println("Range", start, end)
 	for _, edge := range node.edges {
 		first := edge.prefix[0]
 		if start != "-" && first < minId[0] {
@@ -125,16 +138,14 @@ func (s *Stream) Range(start string, end string) []RangeMatch {
 }
 
 func (n *node) rangeMin(min []byte, matches *[]RangeMatch) {
-	sIndex := suffixIdx(n.prefix, min)
-	prefix := n.prefix[:sIndex]
-	if len(prefix) == len(min) && n.leaf != nil {
+	if n.leaf != nil && bytes.Compare(n.prefix, min) >= 0 {
 		*matches = append(*matches, RangeMatch{
 			Id:   n.leaf.id.String(),
 			Pair: n.leaf.payload,
 		})
 		return
 	}
-	min = min[sIndex:]
+	min = min[suffixIdx(n.prefix, min):]
 	for _, edge := range n.edges {
 		first := edge.prefix[0]
 		if first < min[0] {
@@ -149,16 +160,14 @@ func (n *node) rangeMin(min []byte, matches *[]RangeMatch) {
 }
 
 func (n *node) rangeMax(max []byte, matches *[]RangeMatch) {
-	sIndex := suffixIdx(n.prefix, max)
-	prefix := n.prefix[:sIndex]
-	if len(prefix) == len(max) && n.leaf != nil {
+	if n.leaf != nil && bytes.Compare(n.prefix, max) < 1 {
 		*matches = append(*matches, RangeMatch{
 			Id:   n.leaf.id.String(),
 			Pair: n.leaf.payload,
 		})
 		return
 	}
-	max = max[sIndex:]
+	max = max[suffixIdx(n.prefix, max):]
 	for _, edge := range n.edges {
 		first := edge.prefix[0]
 		if first > max[0] {
