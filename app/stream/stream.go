@@ -106,15 +106,16 @@ func (s *Stream) Range(start string, end string) []RangeMatch {
 			break
 		}
 	}
+	fmt.Println("Range", start, end)
 	for _, edge := range node.edges {
 		first := edge.prefix[0]
-		if first < minId[0] {
+		if start != "-" && first < minId[0] {
 			continue
-		} else if first == minId[0] {
-			edge.rangeMin(minId[1:], &matches)
-		} else if first == maxId[0] {
-			edge.rangeMax(maxId[1:], &matches)
-		} else if first > maxId[0] {
+		} else if start != "-" && first == minId[0] {
+			edge.rangeMin(minId, &matches)
+		} else if end != "+" && first == maxId[0] {
+			edge.rangeMax(maxId, &matches)
+		} else if end != "+" && first > maxId[0] {
 			break
 		} else {
 			edge.traversee(&matches)
@@ -124,13 +125,16 @@ func (s *Stream) Range(start string, end string) []RangeMatch {
 }
 
 func (n *node) rangeMin(min []byte, matches *[]RangeMatch) {
-	if n.leaf != nil {
+	sIndex := suffixIdx(n.prefix, min)
+	prefix := n.prefix[:sIndex]
+	if len(prefix) == len(min) && n.leaf != nil {
 		*matches = append(*matches, RangeMatch{
 			Id:   n.leaf.id.String(),
 			Pair: n.leaf.payload,
 		})
 		return
 	}
+	min = min[sIndex:]
 	for _, edge := range n.edges {
 		first := edge.prefix[0]
 		if first < min[0] {
@@ -139,20 +143,22 @@ func (n *node) rangeMin(min []byte, matches *[]RangeMatch) {
 		if first > min[0] {
 			edge.traversee(matches)
 		} else {
-			idx := suffixIdx(edge.prefix, min)
-			edge.rangeMin(min[idx:], matches)
+			edge.rangeMin(min, matches)
 		}
 	}
 }
 
 func (n *node) rangeMax(max []byte, matches *[]RangeMatch) {
-	if n.leaf != nil {
+	sIndex := suffixIdx(n.prefix, max)
+	prefix := n.prefix[:sIndex]
+	if len(prefix) == len(max) && n.leaf != nil {
 		*matches = append(*matches, RangeMatch{
 			Id:   n.leaf.id.String(),
 			Pair: n.leaf.payload,
 		})
 		return
 	}
+	max = max[sIndex:]
 	for _, edge := range n.edges {
 		first := edge.prefix[0]
 		if first > max[0] {
@@ -161,8 +167,7 @@ func (n *node) rangeMax(max []byte, matches *[]RangeMatch) {
 		if first < max[0] {
 			edge.traversee(matches)
 		} else {
-			idx := suffixIdx(edge.prefix, max)
-			edge.rangeMax(max[idx:], matches)
+			edge.rangeMax(max, matches)
 		}
 	}
 }
