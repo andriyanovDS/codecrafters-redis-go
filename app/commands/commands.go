@@ -83,6 +83,7 @@ var commands = map[string]command{
 	"incr":     incr,
 	"type":     type_,
 	"xadd":     xadd,
+	"xrange":   xrange,
 }
 
 var transactionCommands = map[string]transactionCommand{
@@ -332,6 +333,40 @@ func xadd(args []resp.RespDataType, _ resp.RespDataType, writer writer, context 
 		} else {
 			response = resp.BulkString(id)
 		}
+	}
+	context.mutex.Unlock()
+	return writer.Write(response)
+}
+
+func xrange(args []resp.RespDataType, _ resp.RespDataType, writer writer, context *Context) error {
+	if len(args) < 3 {
+		return fmt.Errorf("XRANGE command must contain key, stard and end")
+	}
+	key := resp.String(args[0].(BulkString))
+	start := resp.String(args[1].(BulkString))
+	end := resp.String(args[2].(BulkString))
+	context.mutex.Lock()
+	entry, ok := context.storage[key]
+	s, isStream := entry.value.(*stream.Stream)
+	var response resp.RespDataType
+	if !ok {
+		response = resp.SimpleString("(empty array)")
+	} else if !isStream {
+		response = resp.Error("WRONGTYPE Operation against a key holding the wrong kind of value")
+	} else {
+		content := make([]resp.RespDataType, 0)
+		for _, match := range s.Range(start, end) {
+			fmt.Printf("Found match: %v\n", match)
+			payload := make([]resp.RespDataType, 0, len(match.Pair)*2)
+			for _, pair := range match.Pair {
+				payload = append(payload, resp.BulkString(pair.Field), resp.BulkString(pair.Value))
+			}
+			content = append(content, resp.Array{Content: []resp.RespDataType{
+				resp.BulkString(match.Id),
+				resp.Array{Content: payload},
+			}})
+		}
+		response = resp.Array{Content: content}
 	}
 	context.mutex.Unlock()
 	return writer.Write(response)

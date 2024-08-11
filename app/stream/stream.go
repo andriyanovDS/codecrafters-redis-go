@@ -2,6 +2,7 @@ package stream
 
 import (
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -29,9 +30,14 @@ type node struct {
 }
 
 type Stream struct {
-	root   *node
+	root   node
 	lastID streamID
 	len    uint64
+}
+
+type RangeMatch struct {
+	Id   string
+	Pair []Pair
 }
 
 func New(id string, payload []Pair) (*Stream, error) {
@@ -42,11 +48,14 @@ func New(id string, payload []Pair) (*Stream, error) {
 	if streamID.ms == 0 && streamID.sequence == 0 {
 		return nil, fmt.Errorf("ERR The ID specified in XADD must be greater than 0-0")
 	}
-	node := node{
+	n := node{
 		leaf:   &entry{id: streamID, payload: payload},
 		prefix: []byte(id),
 	}
-	return &Stream{root: &node, lastID: streamID, len: 1}, nil
+	root := node{
+		edges: []*node{&n},
+	}
+	return &Stream{root: root, lastID: streamID, len: 1}, nil
 }
 
 func (s *Stream) Insert(id string, payload []Pair) (string, error) {
@@ -63,12 +72,179 @@ func (s *Stream) Insert(id string, payload []Pair) (string, error) {
 	if streamID.ms == s.lastID.ms && streamID.sequence <= s.lastID.sequence {
 		return "", fmt.Errorf("ERR The ID specified in XADD is equal or smaller than the target stream top item")
 	}
+	id = streamID.String()
 	s.lastID = streamID
+	s.root.insert([]byte(id), streamID, payload)
 	return streamID.String(), nil
+}
+
+func (s *Stream) Range(start string, end string) []RangeMatch {
+	matches := make([]RangeMatch, 0)
+	minId := []byte(start)
+	maxId := []byte(end)
+	node := s.root
+	prefix := node.prefix
+	for {
+		if minId[0] != maxId[0] {
+			break
+		}
+		if len(prefix) > 0 {
+			if prefix[0] == minId[0] {
+				minId = minId[1:]
+				maxId = maxId[1:]
+				prefix = prefix[1:]
+				continue
+			} else {
+				break
+			}
+		}
+		_, child := node.child(minId[0])
+		if child != nil {
+			node = *child
+			prefix = child.prefix
+		} else {
+			break
+		}
+	}
+	for _, edge := range node.edges {
+		first := edge.prefix[0]
+		if first < minId[0] {
+			continue
+		} else if first == minId[0] {
+			edge.rangeMin(minId[1:], &matches)
+		} else if first == maxId[0] {
+			edge.rangeMax(maxId[1:], &matches)
+		} else if first > maxId[0] {
+			break
+		} else {
+			edge.traversee(&matches)
+		}
+	}
+	return matches
+}
+
+func (n *node) rangeMin(min []byte, matches *[]RangeMatch) {
+	if n.leaf != nil {
+		*matches = append(*matches, RangeMatch{
+			Id:   n.leaf.id.String(),
+			Pair: n.leaf.payload,
+		})
+		return
+	}
+	for _, edge := range n.edges {
+		first := edge.prefix[0]
+		if first < min[0] {
+			continue
+		}
+		if first > min[0] {
+			edge.traversee(matches)
+		} else {
+			idx := suffixIdx(edge.prefix, min)
+			edge.rangeMin(min[idx:], matches)
+		}
+	}
+}
+
+func (n *node) rangeMax(max []byte, matches *[]RangeMatch) {
+	if n.leaf != nil {
+		*matches = append(*matches, RangeMatch{
+			Id:   n.leaf.id.String(),
+			Pair: n.leaf.payload,
+		})
+		return
+	}
+	for _, edge := range n.edges {
+		first := edge.prefix[0]
+		if first > max[0] {
+			return
+		}
+		if first < max[0] {
+			edge.traversee(matches)
+		} else {
+			idx := suffixIdx(edge.prefix, max)
+			edge.rangeMax(max[idx:], matches)
+		}
+	}
+}
+
+func (n *node) traversee(matches *[]RangeMatch) {
+	if n.leaf != nil {
+		*matches = append(*matches, RangeMatch{
+			Id:   n.leaf.id.String(),
+			Pair: n.leaf.payload,
+		})
+		return
+	}
+	for _, edge := range n.edges {
+		edge.traversee(matches)
+	}
+}
+
+func (n *node) insert(search []byte, id streamID, payload []Pair) {
+	childIndex, child := n.child(search[0])
+
+	if child == nil {
+		n.appendEdge(&node{
+			leaf:   &entry{id: id, payload: payload},
+			prefix: search,
+		})
+		return
+	}
+
+	suffixIdx := suffixIdx(child.prefix, search)
+	suffix := search[suffixIdx:]
+	prefix := search[0:suffixIdx]
+
+	if len(prefix) == len(child.prefix) {
+		child.insert(suffix, id, payload)
+	} else {
+		splitted := &node{
+			prefix: prefix,
+			edges:  make([]*node, 0),
+		}
+		child.prefix = child.prefix[suffixIdx:]
+		splitted.appendEdge(child)
+		splitted.appendEdge(&node{
+			leaf:   &entry{id: id, payload: payload},
+			prefix: suffix,
+		})
+		n.edges[childIndex] = splitted
+	}
+}
+
+func (n *node) appendEdge(edge *node) {
+	for index, node := range n.edges {
+		if node.prefix[0] > edge.prefix[0] {
+			n.edges = slices.Insert(n.edges, index, edge)
+			return
+		}
+	}
+	n.edges = append(n.edges, edge)
 }
 
 func (s *Stream) LastID() string {
 	return s.lastID.String()
+}
+
+func (n *node) child(prefix byte) (int, *node) {
+	for i, edge := range n.edges {
+		if edge.prefix[0] == prefix {
+			return i, edge
+		}
+	}
+	return 0, nil
+}
+
+func suffixIdx(prefix []byte, search []byte) int {
+	maxLen := min(len(prefix), len(search))
+	start := 0
+	for i := 0; i < maxLen; i++ {
+		if prefix[i] != search[i] {
+			break
+		}
+		start += 1
+	}
+	return start
 }
 
 func parseID(id string, lastID streamID) (streamID, error) {
