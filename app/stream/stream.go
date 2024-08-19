@@ -66,10 +66,12 @@ func New(id string, payload []Pair) (*Stream, error) {
 
 func Block(duration time.Duration, incoming <-chan BlockingXReadPayload) *BlockingXReadPayload {
 	expired := make(chan struct{})
-	go func() {
-		time.Sleep(duration)
-		expired <- struct{}{}
-	}()
+	if duration > 0 {
+		go func() {
+			time.Sleep(duration)
+			expired <- struct{}{}
+		}()
+	}
 	select {
 	case inc := <-incoming:
 		return &inc

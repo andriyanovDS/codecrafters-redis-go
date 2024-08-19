@@ -397,6 +397,7 @@ func xread(args []resp.RespDataType, _ resp.RespDataType, writer writer, context
 	}
 	next := resp.String(args[0].(BulkString))
 	var blockDuration time.Duration
+	var isBlocking bool
 	if next == "block" {
 		seconds, err := strconv.Atoi(resp.String(args[1].(BulkString)))
 		if err != nil {
@@ -405,6 +406,7 @@ func xread(args []resp.RespDataType, _ resp.RespDataType, writer writer, context
 		blockDuration = time.Duration(seconds) * time.Millisecond
 		next = resp.String(args[2].(BulkString))
 		args = args[2:]
+		isBlocking = true
 	}
 	if next != "streams" {
 		return fmt.Errorf("(error) ERR syntax error")
@@ -442,7 +444,7 @@ func xread(args []resp.RespDataType, _ resp.RespDataType, writer writer, context
 				resp.Array{Content: payload},
 			}})
 		}
-		if blockDuration > 0 && len(matches) == 0 {
+		if isBlocking && len(matches) == 0 {
 			streamId, err := stream.ParseID(id, stream.StreamID{})
 			if err != nil {
 				return err
