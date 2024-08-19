@@ -9,7 +9,7 @@ import (
 	"time"
 )
 
-type streamID struct {
+type StreamID struct {
 	ms       uint64
 	sequence uint64
 }
@@ -20,7 +20,7 @@ type Pair struct {
 }
 
 type entry struct {
-	id      streamID
+	id      StreamID
 	payload []Pair
 }
 
@@ -32,7 +32,7 @@ type node struct {
 
 type Stream struct {
 	root   node
-	lastID streamID
+	lastID StreamID
 	len    uint64
 }
 
@@ -41,42 +41,61 @@ type RangeMatch struct {
 	Pair []Pair
 }
 
+type BlockingXReadPayload struct {
+	Id      StreamID
+	Payload []Pair
+}
+
 func New(id string, payload []Pair) (*Stream, error) {
-	streamID, err := parseID(id, streamID{})
+	StreamID, err := ParseID(id, StreamID{})
 	if err != nil {
 		return nil, err
 	}
-	if streamID.ms == 0 && streamID.sequence == 0 {
+	if StreamID.ms == 0 && StreamID.sequence == 0 {
 		return nil, fmt.Errorf("ERR The ID specified in XADD must be greater than 0-0")
 	}
 	n := node{
-		leaf:   &entry{id: streamID, payload: payload},
+		leaf:   &entry{id: StreamID, payload: payload},
 		prefix: []byte(id),
 	}
 	root := node{
 		edges: []*node{&n},
 	}
-	return &Stream{root: root, lastID: streamID, len: 1}, nil
+	return &Stream{root: root, lastID: StreamID, len: 1}, nil
+}
+
+func Block(duration time.Duration, incoming <-chan BlockingXReadPayload) *BlockingXReadPayload {
+	expired := make(chan struct{})
+	go func() {
+		time.Sleep(duration)
+		expired <- struct{}{}
+	}()
+	select {
+	case inc := <-incoming:
+		return &inc
+	case <-expired:
+		return nil
+	}
 }
 
 func (s *Stream) Insert(id string, payload []Pair) (string, error) {
-	streamID, err := parseID(id, s.lastID)
+	StreamID, err := ParseID(id, s.lastID)
 	if err != nil {
 		return "", err
 	}
-	if streamID.ms == 0 && streamID.sequence == 0 {
+	if StreamID.ms == 0 && StreamID.sequence == 0 {
 		return "", fmt.Errorf("ERR The ID specified in XADD must be greater than 0-0")
 	}
-	if streamID.ms < s.lastID.ms {
+	if StreamID.ms < s.lastID.ms {
 		return "", fmt.Errorf("ERR The ID specified in XADD is equal or smaller than the target stream top item")
 	}
-	if streamID.ms == s.lastID.ms && streamID.sequence <= s.lastID.sequence {
+	if StreamID.ms == s.lastID.ms && StreamID.sequence <= s.lastID.sequence {
 		return "", fmt.Errorf("ERR The ID specified in XADD is equal or smaller than the target stream top item")
 	}
-	id = streamID.String()
-	s.lastID = streamID
-	s.root.insert([]byte(id), streamID, payload)
-	return streamID.String(), nil
+	id = StreamID.String()
+	s.lastID = StreamID
+	s.root.insert([]byte(id), StreamID, payload)
+	return StreamID.String(), nil
 }
 
 func (s *Stream) Read(id string) []RangeMatch {
@@ -194,7 +213,7 @@ func (n *node) traversee(matches *[]RangeMatch) {
 	}
 }
 
-func (n *node) insert(search []byte, id streamID, payload []Pair) {
+func (n *node) insert(search []byte, id StreamID, payload []Pair) {
 	childIndex, child := n.child(search[0])
 
 	if child == nil {
@@ -261,37 +280,47 @@ func suffixIdx(prefix []byte, search []byte) int {
 	return start
 }
 
-func parseID(id string, lastID streamID) (streamID, error) {
+func ParseID(id string, lastID StreamID) (StreamID, error) {
 	parts := strings.Split(id, "-")
 	if len(parts) == 0 {
-		return streamID{}, fmt.Errorf("ERR Invalid stream ID specified as stream command argument")
+		return StreamID{}, fmt.Errorf("ERR Invalid stream ID specified as stream command argument")
 	}
 	if parts[0] == "*" {
 		ms := uint64(time.Now().UnixMilli())
 		if ms == lastID.ms {
-			return streamID{ms: ms, sequence: lastID.sequence + 1}, nil
+			return StreamID{ms: ms, sequence: lastID.sequence + 1}, nil
 		} else {
-			return streamID{ms: ms, sequence: 0}, nil
+			return StreamID{ms: ms, sequence: 0}, nil
 		}
 	}
 	ms, err := strconv.ParseUint(parts[0], 10, 64)
 	if err != nil {
-		return streamID{}, err
+		return StreamID{}, err
 	}
 	if parts[1] == "*" {
 		if lastID.ms == ms {
-			return streamID{ms: ms, sequence: lastID.sequence + 1}, nil
+			return StreamID{ms: ms, sequence: lastID.sequence + 1}, nil
 		} else {
-			return streamID{ms: ms, sequence: 0}, nil
+			return StreamID{ms: ms, sequence: 0}, nil
 		}
 	}
 	seq, err := strconv.ParseUint(parts[1], 10, 64)
 	if err != nil {
-		return streamID{}, err
+		return StreamID{}, err
 	}
-	return streamID{ms: ms, sequence: seq}, nil
+	return StreamID{ms: ms, sequence: seq}, nil
 }
 
-func (id streamID) String() string {
+func (id StreamID) String() string {
 	return fmt.Sprintf("%d-%d", id.ms, id.sequence)
+}
+
+func (lhs *StreamID) Cmp(rhs *StreamID) int {
+	if lhs.sequence == rhs.sequence && lhs.ms == rhs.ms {
+		return 0
+	}
+	if lhs.ms > rhs.ms || (lhs.ms == rhs.ms && lhs.sequence > rhs.sequence) {
+		return 1
+	}
+	return -1
 }

@@ -49,6 +49,7 @@ type Context struct {
 	args            args.Args
 	storage         map[string]entity
 	queue           map[string][]resp.RespDataType
+	blockingXreads  map[string]map[stream.StreamID]chan<- stream.BlockingXReadPayload
 	ReplicationRole replication.Role
 	mutex           sync.Mutex
 }
@@ -106,8 +107,9 @@ func NewContext(args args.Args) Context {
 				return replication.NewMaster()
 			}
 		}(),
-		queue: make(map[string][]resp.RespDataType),
-		mutex: sync.Mutex{},
+		blockingXreads: make(map[string]map[stream.StreamID]chan<- stream.BlockingXReadPayload),
+		queue:          make(map[string][]resp.RespDataType),
+		mutex:          sync.Mutex{},
 	}
 }
 
@@ -335,6 +337,23 @@ func xadd(args []resp.RespDataType, _ resp.RespDataType, writer writer, context 
 			response = resp.BulkString(id)
 		}
 	}
+	_, ok = response.(resp.BulkString)
+	if ok {
+		entry, ok := context.blockingXreads[key]
+		streamId, err := stream.ParseID(id, stream.StreamID{})
+		if ok && err == nil {
+			for id, channel := range entry {
+				if streamId.Cmp(&id) == 1 {
+					delete(entry, id)
+					channel <- stream.BlockingXReadPayload{
+						Id:      streamId,
+						Payload: payload,
+					}
+					close(channel)
+				}
+			}
+		}
+	}
 	context.mutex.Unlock()
 	return writer.Write(response)
 }
@@ -376,8 +395,18 @@ func xread(args []resp.RespDataType, _ resp.RespDataType, writer writer, context
 	if len(args) < 3 {
 		return fmt.Errorf("(error) ERR wrong number of arguments for 'xread' command")
 	}
-	streams := resp.String(args[0].(BulkString))
-	if streams != "streams" {
+	next := resp.String(args[0].(BulkString))
+	var blockDuration time.Duration
+	if next == "block" {
+		seconds, err := strconv.Atoi(resp.String(args[1].(BulkString)))
+		if err != nil {
+			return err
+		}
+		blockDuration = time.Duration(seconds) * time.Millisecond
+		next = resp.String(args[2].(BulkString))
+		args = args[2:]
+	}
+	if next != "streams" {
 		return fmt.Errorf("(error) ERR syntax error")
 	}
 	args = args[1:]
@@ -413,10 +442,47 @@ func xread(args []resp.RespDataType, _ resp.RespDataType, writer writer, context
 				resp.Array{Content: payload},
 			}})
 		}
-		content = append(content, resp.Array{Content: []resp.RespDataType{
-			resp.BulkString(key),
-			resp.Array{Content: matches},
-		}})
+		if blockDuration > 0 && len(matches) == 0 {
+			streamId, err := stream.ParseID(id, stream.StreamID{})
+			if err != nil {
+				return err
+			}
+			incoming := make(chan stream.BlockingXReadPayload)
+			existing, ok := context.blockingXreads[key]
+			if !ok {
+				existing = make(map[stream.StreamID]chan<- stream.BlockingXReadPayload)
+				context.blockingXreads[key] = existing
+			}
+			existing[streamId] = incoming
+			context.mutex.Unlock()
+			payload := stream.Block(blockDuration, incoming)
+			if payload != nil {
+				context.mutex.Lock()
+				p := make([]resp.RespDataType, 0, len(payload.Payload)*2)
+				for _, pair := range payload.Payload {
+					p = append(p, resp.BulkString(pair.Field), resp.BulkString(pair.Value))
+				}
+				matches := []resp.RespDataType{
+					resp.Array{Content: []resp.RespDataType{
+						resp.BulkString(payload.Id.String()),
+						resp.Array{Content: p},
+					}},
+				}
+				content = append(content, resp.Array{Content: []resp.RespDataType{
+					resp.BulkString(key),
+					resp.Array{Content: matches},
+				}})
+				delete(existing, streamId)
+			} else {
+				response = resp.NullBulkString{}
+				return writer.Write(response)
+			}
+		} else {
+			content = append(content, resp.Array{Content: []resp.RespDataType{
+				resp.BulkString(key),
+				resp.Array{Content: matches},
+			}})
+		}
 	}
 	response = resp.Array{Content: content}
 	return writer.Write(response)
