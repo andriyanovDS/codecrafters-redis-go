@@ -434,6 +434,9 @@ func xread(args []resp.RespDataType, _ resp.RespDataType, writer writer, context
 			return writer.Write(response)
 		}
 		matches := make([]resp.RespDataType, 0)
+		if id == "$" {
+			id = s.LastID()
+		}
 		for _, match := range s.Read(id) {
 			payload := make([]resp.RespDataType, 0, len(match.Pair)*2)
 			for _, pair := range match.Pair {
